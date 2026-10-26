@@ -3,10 +3,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 MAX_REQUEST_BYTES = 1_500_000
-MAX_PROJECT_FILES = 30
+MAX_PROJECT_FILES = 100
 MAX_PROJECT_BYTES = 700_000
 MODEL_REQUEST_TIMEOUT_SECONDS = 300
-PROJECT_FILE_EXTENSIONS = {".html", ".css", ".js", ".json", ".svg", ".txt", ".md"}
+PROJECT_FILE_EXTENSIONS = {".html", ".css", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".json", ".svg", ".txt", ".md"}
 
 def load_env():
     values = {}

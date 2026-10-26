@@ -2,7 +2,9 @@ import json
 import mimetypes
 import os
 import re
+import select
 import secrets
+import socket
 import threading
 import time
 import traceback
@@ -27,7 +29,9 @@ from .github import (
     github_sessions,
     github_states,
 )
-from .model import generate_project, model_endpoint, validate_project_files
+from .model import generate_project, model_settings, validate_project_files
+from .projects import compile_project, validate_react_project
+from .chat import stream_chat, validate_conversation
 
 
 class StudioHandler(BaseHTTPRequestHandler):
@@ -265,14 +269,17 @@ class StudioHandler(BaseHTTPRequestHandler):
                 self.send_json(502, {"error": str(error)})
             return
         if self.path == "/api/health":
-            env = load_env()
-            model_url = os.environ.get("MODEL_URL") or env.get("MODEL_URL", "")
+            configuration_error = None
             try:
-                model_endpoint(model_url)
+                model_settings()
                 configured = True
-            except ValueError:
+            except ValueError as error:
                 configured = False
-            self.send_json(200, {"modelConfigured": configured})
+                configuration_error = str(error)
+            self.send_json(200, {"modelConfigured": configured, "chatAvailable": True, "configurationError": configuration_error})
+            return
+        if parsed_url.path == "/":
+            self.send_redirect("/main" + ("?" + parsed_url.query if parsed_url.query else ""))
             return
         frontend_root = (ROOT / "dist").resolve()
         if not (frontend_root / "index.html").is_file():
@@ -311,6 +318,20 @@ class StudioHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed_url = urlsplit(self.path)
+        if parsed_url.path == "/api/chat":
+            self.handle_chat()
+            return
+        if parsed_url.path == "/api/preview":
+            data = self.read_json_body()
+            if data is None:
+                return
+            try:
+                files, entrypoint = validate_project_files(data.get("files"), data.get("entrypoint", "index.html"))
+                validate_react_project(files, entrypoint)
+                self.send_json(200, {"html": compile_project(files)})
+            except RuntimeError as error:
+                self.send_json(422, {"error": str(error)})
+            return
         if parsed_url.path == "/api/github/logout":
             session_id = self.github_session_id()
             if session_id:
@@ -344,7 +365,7 @@ class StudioHandler(BaseHTTPRequestHandler):
             except RuntimeError as error:
                 self.send_json(502, {"error": str(error)})
             return
-        if parsed_url.path != "/api/generate":
+        if parsed_url.path not in {"/api/generate", "/api/migrate"}:
             self.send_error(404)
             return
         try:
@@ -356,7 +377,8 @@ class StudioHandler(BaseHTTPRequestHandler):
             if not isinstance(data, dict):
                 self.send_json(400, {"error": "Request body must be a JSON object."})
                 return
-            prompt = data.get("prompt", "")
+            migrating = parsed_url.path == "/api/migrate"
+            prompt = data.get("prompt", "Migrate this website to React while preserving all content, design, routes and functionality." if migrating else "")
             if not isinstance(prompt, str):
                 self.send_json(400, {"error": "Prompt must be text."})
                 return
@@ -389,7 +411,7 @@ class StudioHandler(BaseHTTPRequestHandler):
                 except RuntimeError as error:
                     self.send_json(400, {"error": "Current project files are invalid: " + str(error)})
                     return
-            files, entrypoint = generate_project(prompt, current_files, current_entrypoint, current_assets)
+            files, entrypoint = generate_project(prompt, current_files, current_entrypoint, current_assets, migrate=migrating)
             self.send_json(200, {"files": files, "entrypoint": entrypoint})
         except (json.JSONDecodeError, UnicodeDecodeError):
             self.send_json(400, {"error": "Request body must be valid JSON."})
@@ -403,6 +425,65 @@ class StudioHandler(BaseHTTPRequestHandler):
                 500,
                 {"error": "Unexpected server error. Check the server terminal for details."},
             )
+
+    def handle_chat(self):
+        data = self.read_json_body()
+        if data is None:
+            return
+        try:
+            prompt = data.get("prompt")
+            if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 20_000:
+                raise ValueError("Write a message of at most 20,000 characters.")
+            conversation = validate_conversation(data.get("conversation", []))
+            files, entrypoint = validate_project_files(data.get("currentFiles"), data.get("currentEntrypoint", "index.html"))
+        except (ValueError, RuntimeError) as error:
+            self.send_json(400, {"error": str(error)})
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache, no-store")
+        self.send_header("X-Accel-Buffering", "no")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        cancelled = threading.Event()
+        completed = threading.Event()
+
+        def watch_disconnect():
+            while not completed.wait(0.2):
+                try:
+                    readable, _, _ = select.select([self.connection], [], [], 0)
+                    if readable and not self.connection.recv(1, socket.MSG_PEEK):
+                        cancelled.set()
+                        return
+                except OSError:
+                    cancelled.set()
+                    return
+
+        watcher = threading.Thread(target=watch_disconnect, daemon=True)
+        watcher.start()
+
+        def send(event):
+            self.wfile.write(("data: " + json.dumps(event) + "\n\n").encode("utf-8"))
+            self.wfile.flush()
+
+        try:
+            for event in stream_chat(prompt.strip(), conversation, files, entrypoint, cancelled):
+                if cancelled.is_set():
+                    break
+                send(event)
+        except (BrokenPipeError, ConnectionResetError):
+            cancelled.set()
+        except Exception as error:
+            if not cancelled.is_set():
+                message = str(error) if isinstance(error, (ValueError, RuntimeError)) else "Chat failed unexpectedly. Please retry."
+                try:
+                    send({"type": "error", "error": message})
+                except OSError:
+                    cancelled.set()
+        finally:
+            completed.set()
+            watcher.join(timeout=1)
 
     def log_message(self, format_string, *args):
         print("%s - %s" % (self.address_string(), format_string % args))

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useAdminDashboard } from "@/hooks/useAdminDashboard";
 import { useAuth } from "@/hooks/useAuth";
 import { Brand } from "@/components/Brand";
@@ -9,16 +10,41 @@ import type { ActivityEvent, AdminProject, UserProfile } from "@/types";
 export function Dashboard() {
   const auth = useAuth();
   const admin = useAdminDashboard(auth.user);
+  const [accountBusy, setAccountBusy] = useState(false);
+  const [accountError, setAccountError] = useState<string | null>(null);
+
+  async function handleAccount() {
+    setAccountBusy(true);
+    setAccountError(null);
+    try {
+      if (auth.user) await auth.signOut();
+      else await auth.signIn();
+    } catch (error) {
+      setAccountError(error instanceof Error ? error.message : "Could not update your sign-in.");
+    } finally {
+      setAccountBusy(false);
+    }
+  }
 
   return (
     <div className="min-h-dvh bg-background text-foreground">
       <header className="flex min-h-16 items-center justify-between border-b border-border bg-surface px-5 md:px-8">
-        <a href="/" className="text-lg"><Brand compact /></a>
+        <a href="/admin" className="text-lg"><Brand compact /></a>
         <div className="flex items-center gap-4">
           <span className="hidden max-w-60 truncate text-xs text-muted-foreground sm:block">
             {auth.displayName || auth.user?.email || "Administrator"}
           </span>
-          <a className="text-sm font-medium hover:text-accent" href="/">Back to studio</a>
+          {auth.user && (
+            <a className="text-sm font-medium hover:underline" href={`/${encodeURIComponent(auth.user.uid)}`}>
+              My projects
+            </a>
+          )}
+          <Button
+            disabled={auth.loading || accountBusy || !auth.configured}
+            onClick={() => void handleAccount()}
+          >
+            {auth.loading || accountBusy ? "Please wait…" : auth.user ? "Sign out" : "Sign in with Google"}
+          </Button>
         </div>
       </header>
       <main className="mx-auto max-w-7xl px-4 py-8 md:px-8">
@@ -32,10 +58,21 @@ export function Dashboard() {
               Account details, saved project metadata, and recent usage. Project contents are not shown.
             </p>
           </div>
-          <Button disabled={admin.loading} onClick={() => void admin.refresh()} variant="primary">
+          <Button disabled={auth.loading || !auth.user || admin.loading} onClick={() => void admin.refresh()} variant="primary">
             {admin.loading ? "Refreshing…" : "Refresh data"}
           </Button>
         </div>
+
+        {!auth.configured && (
+          <div className="mt-5">
+            <StatusMessage message="Firebase sign-in is not configured. Configure the Firebase public client settings to access administration." tone="info" />
+          </div>
+        )}
+        {(accountError || auth.error) && (
+          <div className="mt-5">
+            <StatusMessage message={accountError || auth.error || ""} tone="error" />
+          </div>
+        )}
 
         <div className="mt-7 grid gap-3 sm:grid-cols-3">
           <SummaryCard label="Known users" value={admin.profiles.length} />

@@ -22,7 +22,7 @@ service cloud.firestore {
           && request.resource.data.settings is map
           && request.resource.data.files is map
           && request.resource.data.files.size() > 0
-          && request.resource.data.files.size() <= 30
+          && request.resource.data.files.size() <= 100
           && request.resource.data.entrypoint is string
           && request.resource.data.files[request.resource.data.entrypoint] is string
           && request.resource.data.generated is bool

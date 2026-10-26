@@ -1,6 +1,10 @@
 .env
 .env.*.local
+.env.local
+cop.sh
 node_modules/
 dist/
 __pycache__/
 *.py[cod]
+firestore.rules
+firestore.indexes.json

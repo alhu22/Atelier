@@ -7,7 +7,9 @@ import {
   saveProject,
 } from "@/integrations/firebase/projects";
 import { firestore } from "@/integrations/firebase/client";
-import { generateWebsite } from "@/integrations/studioApi";
+import { streamChat, type ChatOptions } from "@/integrations/studioApi";
+import { createProjectFiles, isLegacyProject } from "@/integrations/projectTemplate";
+import { useProjectMigration } from "@/hooks/useProjectMigration";
 import type {
   ProjectFiles,
   ProjectSettings,
@@ -16,42 +18,10 @@ import type {
 } from "@/types";
 
 const STORAGE_PREFIX = "atelier-studio-project-v1";
-const INITIAL_FILES: ProjectFiles = {
-  "index.html": `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Sunday House</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@500;600;700&display=swap" rel="stylesheet">
-    <style>
-      * { box-sizing: border-box; }
-      body { margin: 0; color: #28302b; background: #f5f3ec; font-family: "DM Sans", sans-serif; }
-      header { display: flex; justify-content: space-between; align-items: center; padding: 28px 8vw; }
-      .brand { font-weight: 700; letter-spacing: .16em; text-transform: uppercase; }
-      nav { display: flex; gap: 26px; font-size: 13px; }
-      a { color: inherit; text-decoration: none; }
-      main { display: grid; grid-template-columns: 1fr 1fr; align-items: center; gap: 7vw; min-height: 72vh; padding: 5vh 8vw 10vh; }
-      .eyebrow { font-size: 11px; letter-spacing: .2em; text-transform: uppercase; }
-      h1 { max-width: 620px; margin: 24px 0; font: 500 clamp(54px, 7vw, 100px)/.98 "Playfair Display", serif; letter-spacing: -.055em; }
-      p { max-width: 390px; color: #6c746d; font-size: 16px; line-height: 1.8; }
-      .cta { display: inline-flex; margin-top: 22px; padding: 14px 22px; color: white; background: #414d43; border-radius: 3px; font-size: 13px; }
-      .photo { min-height: 480px; background: linear-gradient(180deg, #0000, #0002), url("https://images.unsplash.com/photo-1449158743715-0a90ebb6d2d8?auto=format&fit=crop&w=1200&q=85") center/cover; }
-      @media (max-width: 700px) { header { padding: 24px; } nav { gap: 12px; } main { grid-template-columns: 1fr; padding: 4vh 24px 8vh; } .photo { min-height: 320px; } }
-    </style>
-  </head>
-  <body>
-    <header><a class="brand" href="#">Sunday House</a><nav><a href="#stay">The house</a><a href="#story">Our story</a><a href="#visit">Visit</a></nav></header>
-    <main><section><span class="eyebrow">A little further from everything</span><h1>Room to breathe again.</h1><p>A quiet cabin in the hills, made for slow mornings, long walks, and remembering what a weekend can feel like.</p><a class="cta" href="#visit">Find your weekend</a></section><div class="photo" role="img" aria-label="A cabin surrounded by trees"></div></main>
-  </body>
-</html>`,
-};
-
 const starterProject = (): StudioProject => ({
   id: "current",
-  name: "Sunday House",
-  files: INITIAL_FILES,
+  name: "Kebabhouse Karlskrona",
+  files: createProjectFiles(),
   entrypoint: "index.html",
   generated: false,
   settings: {},
@@ -135,7 +105,7 @@ function readLocalProjects(uid?: string): StudioProject[] {
   ];
   for (const key of legacyKeys) {
     const project = readProject(localStorage.getItem(key), "current");
-    if (project) candidates.set(project.id, project);
+    if (project && !candidates.has(project.id)) candidates.set(project.id, project);
   }
   const prefix = `${STORAGE_PREFIX}:${owner}:`;
   for (let index = 0; index < localStorage.length; index += 1) {
@@ -231,7 +201,7 @@ function makeSnapshot(
   return { files: { ...files }, entrypoint, activeFile };
 }
 
-export function useStudio(user: User | null) {
+export function useStudio(user: User | null, authLoading = false) {
   const [project, setProject] = useState<StudioProject>(() => {
     const local = readLocalProjects()[0];
     return local ?? starterProject();
@@ -252,16 +222,34 @@ export function useStudio(user: User | null) {
   const [projects, setProjects] = useState<StudioProject[]>([]);
   const [loadingCloud, setLoadingCloud] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [syncAttempt, setSyncAttempt] = useState(0);
   const [generating, setGenerating] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   const [cloudReady, setCloudReady] = useState(false);
   const [readyOwner, setReadyOwner] = useState<string | null>(null);
   const skipNextCloudSave = useRef(false);
   const cloudOwner = user?.uid ?? "local";
+  const ownerRef = useRef(cloudOwner);
+  ownerRef.current = cloudOwner;
+  const previousOwner = useRef("local");
 
   useEffect(() => {
+    if (authLoading) return;
+    setSyncError(null);
+    const priorOwner = previousOwner.current;
+    previousOwner.current = cloudOwner;
     setProjects(readLocalProjects(user?.uid));
     if (!user || !firestore) {
+      setError(null);
+      if (priorOwner !== "local") {
+        const local = readLocalProjects()[0] ?? starterProject();
+        const restored = readLocalHistory(local, "local");
+        setProject(local);
+        setActiveFile(restored.activeFile);
+        setHistory(restored.history);
+        setHistoryIndex(restored.historyIndex);
+      }
       setCloudReady(true);
       setHydrated(true);
       setReadyOwner("local");
@@ -277,16 +265,19 @@ export function useStudio(user: User | null) {
         if (!active) return;
         const localProjects = readLocalProjects(user.uid);
         const combined = new Map(localProjects.map((item) => [item.id, item]));
-        for (const item of cloudProjects) combined.set(item.id, item);
+        for (const item of cloudProjects) {
+          const local = combined.get(item.id);
+          if (!local || item.updatedAt >= local.updatedAt) combined.set(item.id, item);
+        }
         const merged = [...combined.values()].sort(
           (left, right) => right.updatedAt.getTime() - left.updatedAt.getTime(),
         );
         setProjects(merged);
         const current =
-          merged.find((item) => item.id === projectRef.current.id) ??
+          merged.find((item) => item.id === projectRef.current.id && (priorOwner === "local" || priorOwner === user.uid)) ??
           merged[0] ??
-          projectRef.current;
-        skipNextCloudSave.current = true;
+          starterProject();
+        skipNextCloudSave.current = cloudProjects.some((item) => item === current);
         setProject(current);
         const localCurrent = localProjects.find((item) => item.id === current.id);
         const matchingLocal =
@@ -305,7 +296,7 @@ export function useStudio(user: User | null) {
         setHistoryIndex(restoredHistory.historyIndex);
         if (!cloudProjects.some((item) => item.id === current.id)) {
           void saveProject(database, user, current).catch((reason: unknown) =>
-            setError(errorText(reason, "Could not sync this project.")),
+            active && setSyncError(errorText(reason, "Could not sync this project.") + " Your local copy is retained."),
           );
         }
         setCloudReady(true);
@@ -314,8 +305,14 @@ export function useStudio(user: User | null) {
       })
       .catch((reason: unknown) => {
         if (active) {
-          setError(errorText(reason, "Could not load saved cloud projects."));
-          setCloudReady(true);
+          const local = readLocalProjects(user.uid)[0] ?? starterProject();
+          const restored = readLocalHistory(local, user.uid);
+          setProject(local);
+          setActiveFile(restored.activeFile);
+          setHistory(restored.history);
+          setHistoryIndex(restored.historyIndex);
+          setSyncError(errorText(reason, "Could not load saved cloud projects.") + " Working from browser storage; retry cloud sync after correcting access.");
+          setCloudReady(false);
           setHydrated(true);
           setReadyOwner(user.uid);
         }
@@ -326,10 +323,10 @@ export function useStudio(user: User | null) {
     return () => {
       active = false;
     };
-  }, [user]);
+  }, [user, authLoading, cloudOwner, syncAttempt]);
 
   useEffect(() => {
-    if (!hydrated || readyOwner !== cloudOwner) return;
+    if (!hydrated || authLoading || readyOwner !== cloudOwner) return;
     const stored = {
       ...project,
       projectId: project.id,
@@ -360,12 +357,34 @@ export function useStudio(user: User | null) {
     }
     const database = firestore;
     const timer = window.setTimeout(() => {
-      void saveProject(database, user, project).catch((reason: unknown) =>
-        setError(errorText(reason, "Could not sync the project to the cloud.")),
-      );
+      void saveProject(database, user, project).then(() => {
+        if (ownerRef.current === user.uid) setSyncError(null);
+      }).catch((reason: unknown) => {
+        if (ownerRef.current === user.uid) setSyncError(errorText(reason, "Could not sync the project to the cloud.") + " Your local copy is retained.");
+      });
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [project, activeFile, history, historyIndex, user, cloudReady, hydrated, readyOwner, cloudOwner]);
+  }, [project, activeFile, history, historyIndex, user, cloudReady, hydrated, readyOwner, cloudOwner, authLoading]);
+
+  const acceptMigration = useCallback(async (copy: StudioProject) => {
+    const snapshot = makeSnapshot(copy.files, copy.entrypoint, copy.entrypoint);
+    localStorage.setItem(`${STORAGE_PREFIX}:${cloudOwner}:${copy.id}`, JSON.stringify({
+      ...copy, projectId: copy.id, activeFile: copy.entrypoint, history: [snapshot], historyIndex: 0,
+    }));
+    setProjects((current) => [copy, ...current]);
+    setProject(copy);
+    setActiveFile(copy.entrypoint);
+    setHistory([snapshot]);
+    setHistoryIndex(0);
+  }, [cloudOwner]);
+  const { migrating, retryMigration } = useProjectMigration({
+    project,
+    projects,
+    owner: cloudOwner,
+    ready: hydrated && !loadingCloud && !authLoading && readyOwner === cloudOwner,
+    onMigrated: acceptMigration,
+    onError: setError,
+  });
 
   const recordSnapshot = useCallback(
     (nextFiles: ProjectFiles, nextEntrypoint: string, nextActiveFile: string) => {
@@ -423,16 +442,17 @@ export function useStudio(user: User | null) {
   const openProject = useCallback(
     (next: StudioProject) => {
       setProject(next);
-      setActiveFile(next.entrypoint);
-      setHistory(next.generated ? [makeSnapshot(next.files, next.entrypoint, next.entrypoint)] : []);
-      setHistoryIndex(next.generated ? 0 : -1);
+      const restored = readLocalHistory(next, cloudOwner);
+      setActiveFile(restored.activeFile);
+      setHistory(restored.history);
+      setHistoryIndex(restored.historyIndex);
       if (user && firestore) {
         void logProjectActivity(firestore, user, "project_opened").catch(
           (reason: unknown) => setError(errorText(reason, "Could not record project activity.")),
         );
       }
     },
-    [user],
+    [user, cloudOwner],
   );
 
   const deleteProject = useCallback(
@@ -460,26 +480,47 @@ export function useStudio(user: User | null) {
       const normalized = path.trim().replace(/^\/+/, "").replaceAll("\\", "/");
       if (
         !normalized ||
-        normalized.split("/").some((segment) => !segment || segment === "." || segment === "..")
+        !/^[A-Za-z0-9_./-]+$/.test(normalized) ||
+        normalized.split("/").some((segment) => !segment || [".", "..", "node_modules", "dist", ".git"].includes(segment)) ||
+        (normalized.split("/").at(-1)?.startsWith(".env") && normalized !== ".env.example")
       ) {
         throw new Error("Enter a valid relative file path.");
       }
-      if (project.files[normalized]) throw new Error("A file with that path already exists.");
+      if (Object.hasOwn(project.files, normalized)) throw new Error("A file with that path already exists.");
+      if (Object.keys(project.files).length >= 100) throw new Error("Projects are limited to 100 files.");
+      if (!/\.(html|css|js|jsx|ts|tsx|mjs|cjs|json|svg|txt|md)$/.test(normalized) &&
+          ![".gitignore", ".env.example"].includes(normalized)) {
+        throw new Error("Use a supported source file extension, .gitignore, or .env.example.");
+      }
       updateFiles({ ...project.files, [normalized]: "" }, normalized);
     },
     [project.files, updateFiles],
   );
 
   const generate = useCallback(
-    async (prompt: string) => {
+    async (prompt: string, options: ChatOptions) => {
+      if (migrating) throw new Error("Wait for the React migration to finish before generating.");
+      const sourceId = project.id;
+      const sourceOwner = cloudOwner;
       setGenerating(true);
       setError(null);
       try {
-        const result = await generateWebsite(
+        const result = await streamChat(
           prompt,
-          project.generated ? project.files : null,
+          project.files,
           project.entrypoint,
+          options,
         );
+        options.signal.throwIfAborted();
+        if (projectRef.current.id !== sourceId || ownerRef.current !== sourceOwner) {
+          throw new Error("The selected project changed during generation. No project was overwritten.");
+        }
+        if (!result) return [];
+        if (projectRef.current.files !== project.files) {
+          throw new Error("Project files changed while generating. Retry to use the latest files.");
+        }
+        const changedFiles = [...new Set([...Object.keys(project.files), ...Object.keys(result.files)])]
+          .filter((path) => project.files[path] !== result.files[path]);
         const nextActive =
           result.files[activeFile] !== undefined ? activeFile : result.entrypoint;
         updateFiles(result.files, nextActive, result.entrypoint);
@@ -488,14 +529,12 @@ export function useStudio(user: User | null) {
             (reason: unknown) => setError(errorText(reason, "Could not record generation activity.")),
           );
         }
-      } catch (reason) {
-        setError(errorText(reason, "Website generation failed."));
-        throw reason;
+        return changedFiles;
       } finally {
         setGenerating(false);
       }
     },
-    [activeFile, project.entrypoint, project.files, project.generated, updateFiles, user],
+    [activeFile, project.id, project.entrypoint, project.files, updateFiles, user, cloudOwner, migrating],
   );
 
   const restoreHistory = useCallback(
@@ -526,8 +565,14 @@ export function useStudio(user: User | null) {
     canUndo: historyIndex > 0,
     canRedo: historyIndex < history.length - 1,
     loadingCloud,
-    generating,
+    generating: generating || migrating,
+    migrating,
+    legacyProject: isLegacyProject(project.files),
+    retryMigration,
     error,
+    syncError,
+    setSyncError,
+    retrySync: () => setSyncAttempt((attempt) => attempt + 1),
     setError,
     setActiveFile,
     setActiveContent: (content: string) =>

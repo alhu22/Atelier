@@ -1,0 +1,20 @@
+{
+  "colors": {
+    "background": "rgb(var(--background) / <alpha-value>)",
+    "foreground": "rgb(var(--foreground) / <alpha-value>)",
+    "muted": {
+      "DEFAULT": "rgb(var(--muted) / <alpha-value>)",
+      "foreground": "rgb(var(--muted-foreground) / <alpha-value>)"
+    },
+    "primary": {
+      "DEFAULT": "rgb(var(--primary) / <alpha-value>)",
+      "foreground": "rgb(var(--primary-foreground) / <alpha-value>)"
+    },
+    "border": "rgb(var(--border) / <alpha-value>)"
+  },
+  "fontFamily": {
+    "sans": ["DM Sans", "sans-serif"],
+    "display": ["Barlow Condensed", "Impact", "Arial Narrow", "sans-serif"]
+  },
+  "borderRadius": { "sm": "var(--radius)" }
+}

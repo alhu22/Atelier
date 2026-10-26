@@ -5,20 +5,23 @@ import {
   getDocs,
   limit,
   query,
+  runTransaction,
   serverTimestamp,
-  setDoc,
   type Firestore,
 } from "firebase/firestore";
 import type { User } from "firebase/auth";
 import type { ProjectFiles, ProjectSettings, StudioProject } from "@/types";
 import { writeActivity, type ActivityType } from "./auth";
+import { withFirestoreContext } from "./errors";
 
 export async function listProjects(
   database: Firestore,
-  user: User,
+  user: User | null,
 ): Promise<StudioProject[]> {
-  const snapshot = await getDocs(
-    query(collection(database, "users", user.uid, "projects"), limit(100)),
+  if (!user) return [];
+  const snapshot = await withFirestoreContext(
+    "list projects", `users/${user.uid}/projects`,
+    () => getDocs(query(collection(database, "users", user.uid, "projects"), limit(100))),
   );
   return snapshot.docs.map((projectDoc) => {
     const value = projectDoc.data();
@@ -42,31 +45,36 @@ export async function listProjects(
 
 export async function saveProject(
   database: Firestore,
-  user: User,
+  user: User | null,
   project: StudioProject,
 ): Promise<void> {
-  await setDoc(
-    doc(database, "users", user.uid, "projects", project.id),
-    {
+  if (!user) return;
+  const projectRef = doc(database, "users", user.uid, "projects", project.id);
+  await withFirestoreContext("save project (read/write)", projectRef.path, () => runTransaction(database, async (transaction) => {
+    const existing = await transaction.get(projectRef);
+    // Keep Firestore timestamp precision; rules require createdAt to stay unchanged.
+    const createdAt = existing.data()?.createdAt ?? project.createdAt;
+    transaction.set(projectRef, {
       name: project.name,
       owner: user.uid,
       settings: project.settings,
       files: project.files,
       entrypoint: project.entrypoint,
       generated: project.generated,
-      createdAt: project.createdAt,
+      createdAt,
       updatedAt: serverTimestamp(),
-    },
-    { merge: true },
-  );
+    });
+  }));
 }
 
 export async function removeProject(
   database: Firestore,
-  user: User,
+  user: User | null,
   projectId: string,
 ): Promise<void> {
-  await deleteDoc(doc(database, "users", user.uid, "projects", projectId));
+  if (!user) return;
+  const reference = doc(database, "users", user.uid, "projects", projectId);
+  await withFirestoreContext("delete project", reference.path, () => deleteDoc(reference));
 }
 
 export async function logProjectActivity(

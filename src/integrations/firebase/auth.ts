@@ -14,6 +14,7 @@ import {
   type Firestore,
 } from "firebase/firestore";
 import type { Auth } from "firebase/auth";
+import { withFirestoreContext } from "./errors";
 
 export type ActivityType =
   | "session_started"
@@ -40,9 +41,9 @@ export async function recordUserSession(
   user: User,
 ): Promise<void> {
   const profileRef = doc(database, "users", user.uid);
-  const existing = await getDoc(profileRef);
+  const existing = await withFirestoreContext("read profile for session", profileRef.path, () => getDoc(profileRef));
   const profile = existing.data();
-  await setDoc(profileRef, {
+  await withFirestoreContext("save session profile", profileRef.path, () => setDoc(profileRef, {
     email: user.email ?? "",
     displayName:
       typeof profile?.displayName === "string"
@@ -54,7 +55,7 @@ export async function recordUserSession(
         : user.photoURL ?? "",
     createdAt: profile?.createdAt ?? serverTimestamp(),
     lastSeenAt: serverTimestamp(),
-  }, { merge: true });
+  }, { merge: true }));
   await writeActivity(database, user, "session_started");
 }
 
@@ -63,11 +64,12 @@ export async function writeActivity(
   user: User,
   type: ActivityType,
 ): Promise<void> {
-  await setDoc(doc(collection(database, "users", user.uid, "activity")), {
+  const reference = doc(collection(database, "users", user.uid, "activity"));
+  await withFirestoreContext(`record ${type}`, reference.path, () => setDoc(reference, {
     type,
     userEmail: user.email ?? "",
     occurredAt: serverTimestamp(),
-  });
+  }));
 }
 
 export async function saveUserProfile(
@@ -77,8 +79,8 @@ export async function saveUserProfile(
   photoURL: string,
 ): Promise<void> {
   const profileRef = doc(database, "users", user.uid);
-  const existing = await getDoc(profileRef);
-  await setDoc(
+  const existing = await withFirestoreContext("read profile", profileRef.path, () => getDoc(profileRef));
+  await withFirestoreContext("save profile", profileRef.path, () => setDoc(
     profileRef,
     {
       email: user.email ?? "",
@@ -88,5 +90,5 @@ export async function saveUserProfile(
       lastSeenAt: serverTimestamp(),
     },
     { merge: true },
-  );
+  ));
 }

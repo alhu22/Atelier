@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
-import { AssistantPanel, type ConversationMessage } from "@/components/AssistantPanel";
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
+import { AssistantPanel } from "@/components/AssistantPanel";
 import { ProjectHeader } from "@/components/ProjectHeader";
 import { PreviewPanel } from "@/components/PreviewPanel";
 import { Sidebar } from "@/components/Sidebar";
 import { StudioDialogs } from "@/components/StudioDialogs";
 import { StatusMessage } from "@/components/ui/StatusMessage";
+import { Button } from "@/components/ui/Button";
 import { firestore } from "@/integrations/firebase/client";
 import { logProjectActivity } from "@/integrations/firebase/projects";
 import { useAuth } from "@/hooks/useAuth";
@@ -16,39 +17,73 @@ type DialogName = "projects" | "rename" | "file" | "profile" | "github";
 
 export function Index() {
   const account = useAuth();
-  const studio = useStudio(account.user);
+  const studio = useStudio(account.user, account.loading);
   const github = useGitHub(account.user);
   const downloadProject = useProjectDownload();
   const [dialog, setDialog] = useState<DialogName | null>(null);
-  const [messages, setMessages] = useState<ConversationMessage[]>([]);
+  const [codeRequest, setCodeRequest] = useState<{ path: string }>();
   const modelStatus = useModelStatus();
-  const [isAdmin, setIsAdmin] = useState(false);
+  const isAdmin = account.role === "admin";
   const [toast, setToast] = useState<string | null>(null);
   const [toastIsError, setToastIsError] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useStoredCollapse("atelier-sidebar-collapsed");
+  const [chatCollapsed, setChatCollapsed] = useStoredCollapse("atelier-chat-collapsed");
+  const [compactLayout, setCompactLayout] = useState(() => window.matchMedia("(max-width: 1279px)").matches);
+  const [drawer, setDrawer] = useState<"sidebar" | "chat" | null>(null);
+  const sidebarRef = useRef<HTMLDialogElement>(null);
+  const chatRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 1279px)");
+    let previous = media.matches;
+    const update = () => {
+      setCompactLayout(media.matches);
+      if (media.matches !== previous) setDrawer(null);
+      previous = media.matches;
+    };
+    update();
+    media.addEventListener("change", update);
+    window.addEventListener("resize", update);
+    return () => {
+      media.removeEventListener("change", update);
+      window.removeEventListener("resize", update);
+    };
+  }, []);
+
+  useEffect(() => {
+    for (const [panel, name] of [[sidebarRef.current, "sidebar"], [chatRef.current, "chat"]] as const) {
+      if (!panel) continue;
+      if (!compactLayout) {
+        if (panel.matches(":modal")) panel.close();
+        panel.setAttribute("open", "");
+      } else if (drawer === name) {
+        if (panel.open && !panel.matches(":modal")) panel.close();
+        if (!panel.open) panel.showModal();
+      } else {
+        panel.close();
+      }
+    }
+  }, [compactLayout, drawer]);
+
+  useEffect(() => {
+    if (!compactLayout || !drawer) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = previous; };
+  }, [compactLayout, drawer]);
+
+  function closeOnBackdrop(event: MouseEvent<HTMLDialogElement>) {
+    if (compactLayout && event.target === event.currentTarget) {
+      const bounds = event.currentTarget.getBoundingClientRect();
+      if (event.clientX < bounds.left || event.clientX > bounds.right ||
+          event.clientY < bounds.top || event.clientY > bounds.bottom) setDrawer(null);
+    }
+  }
 
   const showError = useCallback((message: string) => {
     setToastIsError(true);
     setToast(message);
   }, []);
-
-  useEffect(() => {
-    let active = true;
-    if (!account.user) {
-      setIsAdmin(false);
-      return;
-    }
-    void account.user
-      .getIdTokenResult()
-      .then((token) => {
-        if (active) setIsAdmin(token.claims.admin === true);
-      })
-      .catch(() => {
-        if (active) setIsAdmin(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, [account.user]);
 
   useEffect(() => {
     if (!toast) return;
@@ -67,35 +102,6 @@ export function Index() {
       window.history.replaceState({}, "", window.location.pathname);
     }
   }, [showError]);
-
-  async function submitPrompt(prompt: string) {
-    const userMessage: ConversationMessage = {
-      id: crypto.randomUUID(),
-      role: "user",
-      content: prompt,
-    };
-    setMessages((current) => [...current, userMessage]);
-    try {
-      await studio.generate(prompt);
-      setMessages((current) => [
-        ...current,
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: "Your project is ready. Preview it, edit the source, or ask for another change.",
-        },
-      ]);
-    } catch (error) {
-      setMessages((current) => [
-        ...current,
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: error instanceof Error ? error.message : "Website generation failed.",
-        },
-      ]);
-    }
-  }
 
   async function downloadZip() {
     try {
@@ -120,24 +126,86 @@ export function Index() {
   }
 
   return (
-    <div className="min-h-dvh bg-background text-foreground md:flex">
+    <div
+      className="builder-layout min-h-dvh bg-background text-foreground"
+      data-sidebar-collapsed={sidebarCollapsed}
+      data-chat-collapsed={chatCollapsed}
+    >
+      <div className="builder-drawer-triggers">
+        <button
+          aria-controls="workspace-sidebar"
+          aria-expanded={drawer === "sidebar"}
+          aria-label="Toggle sidebar"
+          className="rounded border border-border px-3 py-2 text-xs hover:bg-muted"
+          onClick={() => setDrawer("sidebar")}
+          type="button"
+        >Navigation</button>
+        <button
+          aria-controls="workspace-chat"
+          aria-expanded={drawer === "chat"}
+          aria-label="Toggle chat"
+          className="rounded border border-border px-3 py-2 text-xs hover:bg-muted"
+          onClick={() => setDrawer("chat")}
+          type="button"
+        >Chat</button>
+      </div>
+      <dialog
+        aria-label="Workspace navigation"
+        className="builder-panel builder-sidebar"
+        id="workspace-sidebar"
+        onCancel={(event) => { event.preventDefault(); setDrawer(null); }}
+        onClick={closeOnBackdrop}
+        ref={sidebarRef}
+        role={compactLayout ? "dialog" : "presentation"}
+      >
       <Sidebar
+        collapsed={!compactLayout && sidebarCollapsed}
+        onToggle={() => compactLayout ? setDrawer(null) : setSidebarCollapsed((current) => !current)}
         avatar={account.photoURL ? "" : (account.displayName || account.user?.email || "A").slice(0, 1).toUpperCase()}
         isAdmin={isAdmin}
         onNewProject={() => {
           studio.createProject();
-          setMessages([]);
+          setDrawer(null);
         }}
-        onProfile={() => setDialog("profile")}
-        onProjects={() => setDialog("projects")}
+        onProfile={() => { setDrawer(null); setDialog("profile"); }}
+        onProjects={() => { setDrawer(null); setDialog("projects"); }}
         onSettings={() => {
+          setDrawer(null);
           setToastIsError(false);
           setToast("Model settings are managed in .env.");
         }}
         photoURL={account.photoURL}
         userLabel={account.user?.email ?? "Sign in with Google"}
+        workspacePath={account.user ? `/${encodeURIComponent(account.user.uid)}` : "/main"}
       />
-      <main className="flex min-w-0 flex-1 flex-col">
+      </dialog>
+      <dialog
+        aria-label="Build with Atelier"
+        className="builder-panel builder-chat"
+        id="workspace-chat"
+        onCancel={(event) => { event.preventDefault(); setDrawer(null); }}
+        onClick={closeOnBackdrop}
+        ref={chatRef}
+        role={compactLayout ? "dialog" : "presentation"}
+      >
+        <AssistantPanel
+          key={`${account.user?.uid ?? "local"}:${studio.project.id}`}
+          storageKey={`atelier-chat-v1:${account.user?.uid ?? "local"}:${studio.project.id}`}
+          blocked={studio.migrating || account.loading || studio.loadingCloud}
+          collapsed={!compactLayout && chatCollapsed}
+          visible={!compactLayout || drawer === "chat"}
+          files={studio.project.files}
+          modelStatus={modelStatus}
+          onGenerate={studio.generate}
+          onOpenFile={(path) => {
+            studio.setActiveFile(path);
+            setCodeRequest({ path });
+            if (compactLayout) setDrawer(null);
+          }}
+          onToggle={() => compactLayout ? setDrawer(null) : setChatCollapsed((current) => !current)}
+        />
+      </dialog>
+      <main className="builder-project flex min-w-0 flex-col">
         <ProjectHeader
           canRedo={studio.canRedo}
           canUndo={studio.canUndo}
@@ -161,9 +229,19 @@ export function Index() {
           saved={!studio.loadingCloud}
           signedIn={Boolean(account.user)}
         />
-        <div className="flex flex-1 flex-col gap-4 p-3 md:p-5 xl:flex-row">
+        <div className="flex min-w-0 flex-1 flex-col p-3 md:p-5">
           <div className="flex min-w-0 flex-1 flex-col">
+            {studio.migrating ? (
+              <div className="mb-3">
+                <StatusMessage message="Creating a React copy of this website. Your original stays saved and unchanged." tone="info" />
+              </div>
+            ) : studio.legacyProject && studio.error ? (
+              <div className="mb-3">
+                <Button onClick={studio.retryMigration}>Retry React migration</Button>
+              </div>
+            ) : null}
             <PreviewPanel
+              codeRequest={codeRequest}
               activeFile={studio.activeFile}
               content={studio.activeContent}
               entrypoint={studio.project.entrypoint}
@@ -179,7 +257,7 @@ export function Index() {
               onContentChange={studio.setActiveContent}
               onSelectFile={studio.setActiveFile}
             />
-            {(studio.error || account.error || toast) && (
+            {(studio.error || studio.syncError || account.error || toast) && (
               <div className="mt-3 space-y-2">
                 {studio.error && (
                   <StatusMessage
@@ -187,6 +265,12 @@ export function Index() {
                     onDismiss={() => studio.setError(null)}
                     tone="error"
                   />
+                )}
+                {studio.syncError && (
+                  <div className="space-y-2">
+                    <StatusMessage message={studio.syncError} onDismiss={() => studio.setSyncError(null)} tone="error" />
+                    <Button aria-label="Retry cloud sync" disabled={studio.loadingCloud} onClick={studio.retrySync} size="sm">Retry cloud sync</Button>
+                  </div>
                 )}
                 {account.error && (
                   <StatusMessage message={account.error} tone="error" />
@@ -200,14 +284,6 @@ export function Index() {
                 )}
               </div>
             )}
-          </div>
-          <div className="w-full shrink-0 xl:w-[22rem] 2xl:w-[25rem]">
-            <AssistantPanel
-              busy={studio.generating}
-              messages={messages}
-              modelStatus={modelStatus}
-              onSubmit={submitPrompt}
-            />
           </div>
         </div>
       </main>
@@ -240,7 +316,6 @@ export function Index() {
         onRename={studio.renameProject}
         onSelectProject={(project) => {
           studio.openProject(project);
-          setMessages([]);
         }}
         photoURL={account.photoURL}
         profileOpen={dialog === "profile"}
@@ -251,4 +326,22 @@ export function Index() {
       />
     </div>
   );
+}
+
+function useStoredCollapse(key: string) {
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem(key) === "true";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(key, String(collapsed));
+    } catch {
+      // Layout controls still work when browser storage is unavailable.
+    }
+  }, [key, collapsed]);
+  return [collapsed, setCollapsed] as const;
 }

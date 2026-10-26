@@ -2,8 +2,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Textarea } from "@/components/ui/Input";
 import type { ProjectFiles } from "@/types";
+import { useProjectPreview } from "@/hooks/useProjectPreview";
+import { StatusMessage } from "@/components/ui/StatusMessage";
+import { FileTree } from "@/components/FileTree";
 
 interface PreviewPanelProps {
+  codeRequest?: { path: string };
   files: ProjectFiles;
   entrypoint: string;
   activeFile: string;
@@ -18,6 +22,7 @@ type CanvasMode = "preview" | "code";
 type DeviceSize = "desktop" | "tablet" | "mobile";
 
 export function PreviewPanel({
+  codeRequest,
   files,
   entrypoint,
   activeFile,
@@ -28,16 +33,47 @@ export function PreviewPanel({
   onAddFile,
 }: PreviewPanelProps) {
   const [mode, setMode] = useState<CanvasMode>("preview");
+  useEffect(() => {
+    if (codeRequest) setMode("code");
+  }, [codeRequest]);
   const [device, setDevice] = useState<DeviceSize>("desktop");
+  const [filesCollapsed, setFilesCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem("atelier-files-collapsed") === "true";
+    } catch {
+      return false;
+    }
+  });
+  const [frameHeight, setFrameHeight] = useState(384);
   const frameRef = useRef<HTMLIFrameElement>(null);
+  const compiled = useProjectPreview(files, entrypoint);
   const srcDoc = useMemo(
-    () => buildPreviewDocument(files, activeFile, content),
-    [activeFile, content, files],
+    () => withPreviewSizing(compiled.reactProject ? compiled.html : buildPreviewDocument(files, activeFile, content)),
+    [activeFile, content, files, compiled.reactProject, compiled.html],
   );
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("atelier-files-collapsed", String(filesCollapsed));
+    } catch {
+      // The panel remains usable when browser storage is unavailable.
+    }
+  }, [filesCollapsed]);
+
+  useEffect(() => setFrameHeight(384), [srcDoc]);
 
   useEffect(() => {
     function handlePreviewNavigation(event: MessageEvent<unknown>) {
       if (event.source !== frameRef.current?.contentWindow) return;
+      if (
+        typeof event.data === "object" && event.data !== null &&
+        "type" in event.data && event.data.type === "atelier-height" &&
+        "height" in event.data && typeof event.data.height === "number" &&
+        Number.isFinite(event.data.height)
+      ) {
+        setFrameHeight(Math.max(384, Math.min(100_000, event.data.height)));
+        return;
+      }
       if (
         typeof event.data === "object" &&
         event.data !== null &&
@@ -84,45 +120,52 @@ export function PreviewPanel({
           ))}
         </div>
       </div>
-      <div className="grid min-h-0 flex-1 grid-cols-[9rem_minmax(0,1fr)]">
+      <div
+        className="grid min-h-0 flex-1 transition-[grid-template-columns] duration-200 ease-in-out motion-reduce:transition-none"
+        style={{ gridTemplateColumns: `${filesCollapsed ? "40px" : "min(14rem, 42%)"} minmax(0, 1fr)` }}
+      >
         <aside
           aria-label="Project files"
-          className="border-r border-border bg-background/50"
+          className="min-w-0 overflow-hidden border-r border-border bg-background/50"
         >
-          <div className="flex items-center justify-between px-3 py-3 text-xs font-semibold">
-            Files
-            <Button aria-label="Add file" onClick={onAddFile} size="sm">
-              +
-            </Button>
+          <div className={`flex items-center gap-1 py-3 text-xs font-semibold ${filesCollapsed ? "justify-center" : "px-2"}`}>
+            {!filesCollapsed && <span className="mr-auto">Files</span>}
+            {!filesCollapsed && <Button aria-label="Add file" onClick={onAddFile} size="sm">+</Button>}
+            <button
+              aria-controls="project-file-tree"
+              aria-expanded={!filesCollapsed}
+              aria-label="Toggle files panel"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded hover:bg-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+              onClick={() => setFilesCollapsed((current) => !current)}
+              type="button"
+            >
+              <svg aria-hidden="true" fill="none" height="18" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 20 20" width="18">
+                <rect height="14" rx="2" width="16" x="2" y="3" />
+                <path d="M7 3v14" />
+                <path d={filesCollapsed ? "m11 7 3 3-3 3" : "m14 7-3 3 3 3"} />
+              </svg>
+            </button>
           </div>
-          <ul className="space-y-0.5 px-2 pb-3">
-            {Object.keys(files)
-              .sort()
-              .map((path) => (
-                <li key={path}>
-                  <button
-                    className={`w-full truncate rounded px-2 py-1.5 text-left font-mono text-[11px] ${path === activeFile ? "bg-muted font-semibold text-foreground" : "text-muted-foreground hover:bg-muted/60"}`}
-                    onClick={() => onSelectFile(path)}
-                    title={path}
-                    type="button"
-                  >
-                    {path}
-                  </button>
-                </li>
-              ))}
-          </ul>
+          <div hidden={filesCollapsed} id="project-file-tree">
+            <FileTree activeFile={activeFile} files={files} onSelectFile={onSelectFile} />
+          </div>
         </aside>
         <div className="flex min-w-0 flex-col bg-background">
           <div className="border-b border-border px-4 py-2 font-mono text-[11px] text-muted-foreground">
             {activeFile || entrypoint}
           </div>
-          <div className="flex min-h-[24rem] flex-1 items-start justify-center overflow-auto bg-muted/50 p-3 md:p-5">
-            {mode === "preview" ? (
+          <div className="flex min-h-[24rem] min-w-0 flex-1 items-start justify-center bg-muted/50 p-3 md:p-5">
+            {mode === "preview" && compiled.loading ? (
+              <p role="status" className="p-5 text-sm text-muted-foreground">Compiling React preview…</p>
+            ) : mode === "preview" && compiled.error ? (
+              <StatusMessage message={compiled.error} tone="error" />
+            ) : mode === "preview" ? (
               <iframe
                 ref={frameRef}
-                className={`min-h-[24rem] flex-1 border border-border bg-white shadow-sm transition-[max-width] ${deviceWidth[device]}`}
+                className={`min-h-[24rem] min-w-0 flex-1 border-0 bg-white shadow-sm transition-[max-width] ${deviceWidth[device]}`}
                 sandbox="allow-scripts"
                 srcDoc={srcDoc}
+                style={{ height: frameHeight }}
                 title="Website preview"
               />
             ) : (
@@ -137,7 +180,7 @@ export function PreviewPanel({
           </div>
           {mode === "code" && (
             <div className="flex justify-end border-t border-border p-2">
-              <Button onClick={onApply} variant="primary">
+              <Button onClick={() => { onApply(); setMode("preview"); }} variant="primary">
                 Apply changes
               </Button>
             </div>
@@ -153,6 +196,28 @@ const deviceWidth: Record<DeviceSize, string> = {
   tablet: "max-w-[768px]",
   mobile: "max-w-[390px]",
 };
+
+function withPreviewSizing(html: string): string {
+  const bridge = `<script>(() => {
+    let queued = false;
+    const measure = () => {
+      if (queued) return;
+      queued = true;
+      window.setTimeout(() => {
+        queued = false;
+        const body = document.body;
+        const height = Math.ceil(Math.max(body.scrollHeight, body.getBoundingClientRect().bottom + scrollY) + parseFloat(getComputedStyle(body).marginBottom || "0"));
+        parent.postMessage({ type: "atelier-height", height }, "*");
+      });
+    };
+    new ResizeObserver(measure).observe(document.body);
+    window.addEventListener("load", measure);
+    window.addEventListener("resize", measure);
+    document.fonts.ready.then(measure);
+    measure();
+  })();</script>`;
+  return html.replace(/<\/body\s*>/i, `${bridge}</body>`);
+}
 
 function buildPreviewDocument(
   files: ProjectFiles,

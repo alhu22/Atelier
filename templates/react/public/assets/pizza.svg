@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="800" viewBox="0 0 720 800">
+  <defs>
+    <radialGradient id="table"><stop stop-color="#cc875d"/><stop offset="1" stop-color="#a83e2c"/></radialGradient>
+    <radialGradient id="crust"><stop stop-color="#edb765"/><stop offset=".88" stop-color="#e6a854"/><stop offset="1" stop-color="#b96730"/></radialGradient>
+    <radialGradient id="cheese"><stop stop-color="#f8e3a0"/><stop offset="1" stop-color="#efc26b"/></radialGradient>
+    <filter id="shadow" x="-.2" y="-.2" width="1.4" height="1.4"><feDropShadow dx="0" dy="16" stdDeviation="18" flood-color="#502215" flood-opacity=".3"/></filter>
+    <g id="tomato"><circle r="32" fill="#a83e2c"/><circle r="25" fill="#cf5733"/><path d="M-18-8 18 8M-8 18 8-18" stroke="#e8854a" stroke-width="4"/><circle r="6" fill="#f0ad65"/></g>
+    <g id="basil"><path d="M0 28C-54 4-25-42 0-38 34-39 44 5 0 28" fill="#315539"/><path d="M0 25 1-25" stroke="#839551" stroke-width="3"/></g>
+  </defs>
+  <path fill="url(#table)" d="M0 0h720v800H0z"/>
+  <path d="m0 620 720-220v230L0 800Z" fill="#f6f1e7" opacity=".12"/>
+  <g filter="url(#shadow)" transform="rotate(-14 360 390)">
+    <circle cx="350" cy="378" r="286" fill="#f6f1e7"/>
+    <circle cx="350" cy="378" r="270" fill="#ded2b9"/>
+    <circle cx="350" cy="378" r="251" fill="url(#crust)"/>
+    <circle cx="350" cy="378" r="222" fill="#b6482e"/>
+    <path d="M350 164c117 0 213 92 212 214 0 120-94 211-212 210-121 0-212-91-212-210 0-120 94-214 212-214Z" fill="url(#cheese)"/>
+    <g fill="#b97738" opacity=".65"><ellipse cx="248" cy="282" rx="20" ry="10"/><ellipse cx="418" cy="245" rx="12" ry="18"/><ellipse cx="460" cy="430" rx="25" ry="12"/><ellipse cx="263" cy="495" rx="20" ry="9"/><ellipse cx="332" cy="415" rx="15" ry="21"/><ellipse cx="344" cy="553" rx="11" ry="8"/></g>
+    <use href="#tomato" x="295" y="226"/><use href="#tomato" x="459" y="307"/><use href="#tomato" x="210" y="367"/><use href="#tomato" x="341" y="348"/><use href="#tomato" x="389" y="477"/><use href="#tomato" x="266" y="529"/>
+    <use href="#basil" transform="translate(350 270) rotate(35)"/><use href="#basil" transform="translate(258 410) rotate(-55)"/><use href="#basil" transform="translate(478 384) rotate(70)"/><use href="#basil" transform="translate(334 508) rotate(15)"/>
+    <g fill="#faf0cd"><ellipse cx="212" cy="299" rx="15" ry="10"/><ellipse cx="391" cy="390" rx="21" ry="14"/><ellipse cx="428" cy="528" rx="13" ry="9"/></g>
+  </g>
+  <g fill="#f6f1e7" opacity=".7"><circle cx="86" cy="704" r="3"/><circle cx="114" cy="723" r="4"/><circle cx="100" cy="683" r="2"/><circle cx="580" cy="116" r="3"/><circle cx="594" cy="137" r="2"/></g>
+  <use href="#basil" transform="translate(134 696) rotate(-45)"/>
+</svg>

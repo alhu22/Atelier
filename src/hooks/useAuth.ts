@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { createContext, createElement, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import type { User } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { auth, firebaseConfigured, firestore } from "@/integrations/firebase/client";
+import { withFirestoreContext } from "@/integrations/firebase/errors";
 import {
   observeUser,
   recordUserSession,
@@ -17,33 +18,52 @@ interface AuthState {
   error: string | null;
   displayName: string;
   photoURL: string;
+  role: "admin" | "builder" | null;
+}
+
+const AuthContext = createContext<ReturnType<typeof useAuthState> | null>(null);
+
+export function AuthProvider({ children }: { children: ReactNode }) {
+  return createElement(AuthContext.Provider, { value: useAuthState() }, children);
 }
 
 export function useAuth() {
+  const value = useContext(AuthContext);
+  if (!value) throw new Error("useAuth must be used inside AuthProvider.");
+  return value;
+}
+
+function useAuthState() {
   const previousUser = useRef<User | null>(null);
+  const authVersion = useRef(0);
   const [state, setState] = useState<AuthState>({
     user: null,
     loading: firebaseConfigured,
     error: null,
     displayName: "",
     photoURL: "",
+    role: null,
   });
 
   useEffect(() => {
     if (!auth || !firestore) return;
 
     const database = firestore;
-    return observeUser(auth, (user) => {
+    const unsubscribe = observeUser(auth, (user) => {
+      const version = ++authVersion.current;
+      const active = () => version === authVersion.current && previousUser.current?.uid === user?.uid;
       setState((previous) => ({
         ...previous,
         user,
-        loading: false,
+        loading: Boolean(user),
+        role: null,
         error: null,
         displayName: user?.displayName ?? "",
         photoURL: user?.photoURL ?? "",
       }));
       if (user && previousUser.current?.uid !== user.uid) {
         void recordUserSession(database, user).catch((error: unknown) => {
+          if (!active()) return;
           setState((previous) => ({
             ...previous,
             error: errorMessage(error, "Could not sync your account profile."),
@@ -52,9 +72,27 @@ export function useAuth() {
       }
       previousUser.current = user;
       if (user) {
-        void getDoc(doc(database, "users", user.uid))
+        void user.getIdTokenResult(true)
+          .then((token) => {
+            if (!active()) return;
+            setState((previous) => ({
+              ...previous,
+              role: token.claims.admin === true ? "admin" : "builder",
+              loading: false,
+            }));
+          })
+          .catch((error: unknown) => {
+            if (!active()) return;
+            setState((previous) => ({
+              ...previous,
+              loading: false,
+              role: null,
+              error: errorMessage(error, "Could not verify account access. Sign out and try again."),
+            }));
+          });
+        void withFirestoreContext("load profile", `users/${user.uid}`, () => getDoc(doc(database, "users", user.uid)))
           .then((snapshot) => {
-            if (!snapshot.exists() || previousUser.current?.uid !== user.uid) return;
+            if (!snapshot.exists() || !active()) return;
             const profile = snapshot.data();
             setState((previous) => ({
               ...previous,
@@ -69,6 +107,7 @@ export function useAuth() {
             }));
           })
           .catch((error: unknown) => {
+            if (!active()) return;
             setState((previous) => ({
               ...previous,
               error: errorMessage(error, "Could not load your profile."),
@@ -76,6 +115,11 @@ export function useAuth() {
           });
       }
     });
+    return () => {
+      authVersion.current += 1;
+      previousUser.current = null;
+      unsubscribe();
+    };
   }, []);
 
   const signIn = useCallback(async () => {

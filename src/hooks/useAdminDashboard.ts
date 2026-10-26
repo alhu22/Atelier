@@ -35,8 +35,13 @@ export function useAdminDashboard(user: User | null) {
   const [selectedUid, setSelectedUid] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const loadedUid = useRef<string | null>(null);
+  const requestVersion = useRef(0);
+  const currentUid = useRef(user?.uid);
+  currentUid.current = user?.uid;
 
   const refresh = useCallback(async () => {
+    const version = ++requestVersion.current;
+    const active = () => version === requestVersion.current && currentUid.current === user?.uid;
     if (!user || !firestore) {
       loadedUid.current = null;
       setSelectedUid(null);
@@ -68,6 +73,7 @@ export function useAdminDashboard(user: User | null) {
     }
     try {
       const token = await user.getIdTokenResult(true);
+      if (!active()) return;
       if (token.claims.admin !== true) {
         setData({
           profiles: [],
@@ -92,6 +98,7 @@ export function useAdminDashboard(user: User | null) {
             ),
           ),
         ]);
+      if (!active()) return;
 
       const profileRecords: UserProfile[] = profileSnapshot.docs.map((item) => {
         const value = item.data();
@@ -179,6 +186,7 @@ export function useAdminDashboard(user: User | null) {
       });
       setSelectedUid((current) => current ?? profiles[0]?.uid ?? null);
     } catch (error) {
+      if (!active()) return;
       setData((current) => ({
         ...current,
         loading: false,
@@ -192,9 +200,14 @@ export function useAdminDashboard(user: User | null) {
 
   useEffect(() => {
     void refresh();
+    return () => { requestVersion.current += 1; };
   }, [refresh]);
 
-  const filteredProfiles = data.profiles.filter((profile) => {
+  const visible = Boolean(user && loadedUid.current === user.uid && data.isAdmin);
+  const profiles = visible ? data.profiles : [];
+  const projects = visible ? data.projects : [];
+  const activity = visible ? data.activity : [];
+  const filteredProfiles = profiles.filter((profile) => {
     const needle = search.trim().toLowerCase();
     return (
       !needle ||
@@ -205,16 +218,20 @@ export function useAdminDashboard(user: User | null) {
     );
   });
   const selectedProfile =
-    data.profiles.find((profile) => profile.uid === selectedUid) ?? null;
-  const selectedProjects = data.projects.filter(
+    profiles.find((profile) => profile.uid === selectedUid) ?? null;
+  const selectedProjects = projects.filter(
     (project) => project.owner === selectedUid,
   );
-  const selectedActivity = data.activity
+  const selectedActivity = activity
     .filter((event) => event.owner === selectedUid)
     .slice(0, 8);
 
   return {
     ...data,
+    profiles,
+    projects,
+    activity,
+    isAdmin: visible,
     search,
     setSearch,
     selectedUid,
