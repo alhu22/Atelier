@@ -1,0 +1,106 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 50 23% 94%;
+  --foreground: 140 10% 18%;
+  --surface: 48 25% 98%;
+  --muted: 48 12% 90%;
+  --muted-foreground: 140 5% 43%;
+  --border: 45 12% 83%;
+  --accent: 139 16% 36%;
+  --accent-foreground: 48 25% 98%;
+  font-family: "DM Sans", sans-serif;
+  color-scheme: light;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-width: 320px;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  min-height: 100dvh;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+dialog[open] {
+  animation: dialog-in 140ms ease-out;
+}
+
+.brand-mark {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border-radius: 50% 50% 50% 0;
+  background: hsl(var(--accent));
+  transform: rotate(-45deg);
+}
+
+.sidebar-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  border-radius: 6px;
+  padding: 10px 12px;
+  color: hsl(var(--foreground) / 0.72);
+  text-align: left;
+  font-size: 13px;
+}
+
+.sidebar-link:hover,
+.sidebar-link-active {
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
+}
+
+.typing-dots {
+  animation: pulse 1s ease-in-out infinite;
+  letter-spacing: 0.15em;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (min-width: 768px) {
+  .sidebar-link {
+    text-decoration: none;
+  }
+}

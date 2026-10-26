@@ -1,0 +1,113 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isAdmin() {
+      return request.auth != null && request.auth.token.admin == true;
+    }
+
+    match /users/{userId}/projects/{projectId} {
+      function validProject() {
+        return request.resource.data.keys().hasAll([
+            'name', 'owner', 'settings', 'files', 'entrypoint',
+            'generated', 'createdAt', 'updatedAt'
+          ])
+          && request.resource.data.keys().hasOnly([
+            'name', 'owner', 'settings', 'files', 'entrypoint',
+            'generated', 'createdAt', 'updatedAt'
+          ])
+          && request.resource.data.name is string
+          && request.resource.data.name.size() <= 120
+          && request.resource.data.owner == userId
+          && request.resource.data.settings is map
+          && request.resource.data.files is map
+          && request.resource.data.files.size() > 0
+          && request.resource.data.files.size() <= 30
+          && request.resource.data.entrypoint is string
+          && request.resource.data.files[request.resource.data.entrypoint] is string
+          && request.resource.data.generated is bool
+          && request.resource.data.createdAt is timestamp
+          && request.resource.data.updatedAt is timestamp;
+      }
+
+      allow get, list: if isAdmin()
+        || (request.auth != null && request.auth.uid == userId);
+      allow create: if request.auth != null
+        && request.auth.uid == userId
+        && validProject();
+      allow update: if request.auth != null
+        && request.auth.uid == userId
+        && (
+          !resource.data.keys().hasAny(['owner'])
+          || resource.data.owner == userId
+        )
+        && (
+          !resource.data.keys().hasAny(['createdAt'])
+          || request.resource.data.createdAt == resource.data.createdAt
+        )
+        && validProject();
+      allow delete: if request.auth != null && request.auth.uid == userId;
+    }
+
+    match /{path=**}/projects/{projectId} {
+      allow get, list: if isAdmin();
+    }
+
+    match /users/{userId} {
+      allow get: if isAdmin() || (request.auth != null && request.auth.uid == userId);
+      allow list: if isAdmin();
+      allow create: if request.auth != null
+        && request.auth.uid == userId
+        && request.resource.data.keys().hasAll([
+          'email', 'displayName', 'photoURL', 'createdAt', 'lastSeenAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'email', 'displayName', 'photoURL', 'createdAt', 'lastSeenAt'
+        ])
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.displayName is string
+        && request.resource.data.displayName.size() <= 120
+        && request.resource.data.photoURL is string
+        && request.resource.data.photoURL.size() <= 2048
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.lastSeenAt == request.time;
+      allow update: if request.auth != null
+        && request.auth.uid == userId
+        && request.resource.data.keys().hasAll([
+          'email', 'displayName', 'photoURL', 'createdAt', 'lastSeenAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'email', 'displayName', 'photoURL', 'createdAt', 'lastSeenAt'
+        ])
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.displayName is string
+        && request.resource.data.displayName.size() <= 120
+        && request.resource.data.photoURL is string
+        && request.resource.data.photoURL.size() <= 2048
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.lastSeenAt == request.time;
+    }
+
+    match /users/{userId}/activity/{activityId} {
+      allow create: if request.auth != null
+        && request.auth.uid == userId
+        && request.resource.data.keys().hasAll(['type', 'userEmail', 'occurredAt'])
+        && request.resource.data.keys().hasOnly(['type', 'userEmail', 'occurredAt'])
+        && request.resource.data.type in [
+          'session_started',
+          'session_ended',
+          'project_created',
+          'project_opened',
+          'generation_completed',
+          'project_exported'
+        ]
+        && request.resource.data.userEmail == request.auth.token.email
+        && request.resource.data.occurredAt == request.time;
+      allow get, list: if isAdmin();
+    }
+
+    match /{path=**}/activity/{activityId} {
+      allow get, list: if isAdmin();
+    }
+  }
+}
