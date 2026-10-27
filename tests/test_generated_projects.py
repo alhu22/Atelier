@@ -32,7 +32,10 @@ class GeneratedProjectTests(unittest.TestCase):
     def test_template_is_delivered_source_not_builder_or_build_output(self):
         validate_react_project(self.files, "index.html")
         validate_project_files(self.files, "index.html")
-        self.assertIn("STOR SMAK.", self.files["src/components/sections/HeroSection.tsx"])
+        self.assertIn("Your new website", self.files["src/components/sections/HeroSection.tsx"])
+        self.assertIn("{{projectName}}", self.files["README.md"])
+        self.assertFalse(any(name.endswith((".svg", ".png", ".jpg")) for name in self.files))
+        self.assertNotIn("https://", self.files["index.html"])
         self.assertNotIn("src/hooks/useStudio.ts", self.files)
         self.assertFalse(any(name.startswith(("dist/", "node_modules/")) for name in self.files))
 
@@ -189,9 +192,13 @@ class ChatTests(unittest.TestCase):
         response.status = 200
         return response
 
-    def run_stream(self, chunks, files=None, model="test"):
+    def run_stream(self, chunks, files=None, model="test", output_limit=""):
         with (
-            patch.dict("os.environ", {"API_KEY": "test", "MODEL_URL": "https://example.invalid/v1", "MODEL_NAME": model}),
+            patch.dict("os.environ", {
+                "API_KEY": "test", "MODEL_URL": "https://example.invalid/v1", "MODEL_NAME": model,
+                "MODEL_MAX_COMPLETION_TOKENS": output_limit, "MODEL_CONTEXT_TOKENS": "128000",
+            }),
+            patch("atelier_server.config.load_env", return_value={}),
             patch("atelier_server.chat.HTTPSConnection") as connection,
             patch("atelier_server.chat.compile_project", return_value="<html></html>") as compile_result,
         ):
@@ -217,7 +224,7 @@ class ChatTests(unittest.TestCase):
 
     def test_fragmented_tool_arguments_are_validated_before_applying(self):
         files = template_files()
-        arguments = json.dumps({"files": files, "entrypoint": "index.html"})
+        arguments = json.dumps({"name": "  Ceramic Studio  ", "files": files, "entrypoint": "index.html"})
         result, _, compile_result = self.run_stream([
             self.chunk({"content": "Updating the site."}),
             self.chunk({"tool_calls": [{"index": 0, "function": {"name": "apply_project", "arguments": arguments[:50]}}]}),
@@ -225,7 +232,29 @@ class ChatTests(unittest.TestCase):
             self.chunk(finish="tool_calls"),
         ], files)
         self.assertEqual(result[-1]["project"]["files"], files)
+        self.assertEqual(result[-1]["project"]["name"], "Ceramic Studio")
         compile_result.assert_called_once_with(files, check_types=True)
+
+    def test_invalid_project_names_never_emit_done(self):
+        for name in ("   ", 42, "x" * 121):
+            arguments = json.dumps({"name": name, "files": {"index.html": "<html>Updated</html>"}, "entrypoint": "index.html"})
+            with self.subTest(name=name), self.assertRaises(RuntimeError):
+                self.run_stream([
+                    self.chunk({"tool_calls": [{"function": {"name": "apply_project", "arguments": arguments}}]}),
+                    self.chunk(finish="tool_calls"),
+                ])
+
+    def test_project_name_is_preserved_when_deleting_files(self):
+        arguments = json.dumps({
+            "name": "Ceramic Studio", "files": {"index.html": "<html>Portfolio</html>"},
+            "entrypoint": "index.html", "deletedFiles": ["old.txt"],
+        })
+        result, _, _ = self.run_stream([
+            self.chunk({"tool_calls": [{"function": {"name": "apply_project", "arguments": arguments}}]}),
+            self.chunk(finish="tool_calls"),
+        ], {"index.html": "<html>Original</html>", "old.txt": "Old content"})
+        self.assertEqual(result[-1]["project"]["name"], "Ceramic Studio")
+        self.assertNotIn("old.txt", result[-1]["project"]["files"])
 
     def test_truncated_or_unsafe_changes_never_emit_done(self):
         for chunks in (
@@ -246,7 +275,7 @@ class ChatTests(unittest.TestCase):
         self.assertEqual(validate_conversation([{"role": "user", "content": "  "}]), [])
 
     def test_reasoning_model_uses_responses_with_streamed_function_arguments(self):
-        arguments = json.dumps({"files": {"index.html": "<html>Updated</html>"}, "entrypoint": "index.html"})
+        arguments = json.dumps({"name": "Ceramic Studio", "files": {"index.html": "<html>Updated</html>"}, "entrypoint": "index.html"})
         result, payload, _ = self.run_stream([
             {"type": "response.output_text.delta", "delta": "Updating your heading."},
             {"type": "response.output_item.added", "item": {"type": "function_call", "name": "apply_project", "arguments": ""}},
@@ -258,9 +287,52 @@ class ChatTests(unittest.TestCase):
         self.assertNotIn("messages", payload)
         self.assertNotIn("reasoning_effort", payload)
         self.assertNotIn("max_tokens", payload)
-        self.assertEqual(payload["max_output_tokens"], 16000)
+        self.assertEqual(payload["max_output_tokens"], 32000)
         self.assertFalse(payload["tools"][0]["strict"])
         self.assertEqual(result[-1]["project"]["files"]["index.html"], "<html>Updated</html>")
+        self.assertEqual(result[-1]["project"]["name"], "Ceramic Studio")
+
+    def test_chat_respects_configured_output_limit(self):
+        _, payload, _ = self.run_stream([
+            self.chunk({"content": "Hello"}), self.chunk(finish="stop"),
+        ], output_limit="24000")
+        self.assertEqual(payload["max_completion_tokens"], 24000)
+        _, payload, _ = self.run_stream([
+            {"type": "response.output_text.delta", "delta": "Hello"},
+            {"type": "response.completed", "response": {"status": "completed"}},
+        ], model="gpt-6-astra", output_limit="24000")
+        self.assertEqual(payload["max_output_tokens"], 24000)
+
+    def test_incomplete_responses_explain_the_reason_without_applying_changes(self):
+        for reason, message in (
+            ("max_output_tokens", "output token limit"),
+            ("content_filter", "content filter"),
+            ("other_reason", "other_reason"),
+            (None, "Generation was incomplete"),
+        ):
+            with self.subTest(reason=reason), self.assertLogs("atelier_server.model", level="ERROR"):
+                with self.assertRaisesRegex(RuntimeError, message) as raised:
+                    self.run_stream([
+                        {"type": "response.output_text.delta", "delta": "Building Maison."},
+                        {"type": "response.output_item.added", "item": {
+                            "type": "function_call", "name": "apply_project", "arguments": "",
+                        }},
+                        {"type": "response.function_call_arguments.delta", "delta": '{"files":{"index.html":"partial'},
+                        {"type": "response.incomplete", "response": {
+                            "status": "incomplete", "error": None,
+                            "incomplete_details": {"reason": reason} if reason else None,
+                        }},
+                    ], model="gpt-6-astra")
+                self.assertNotIn("HTTP 400", str(raised.exception))
+                self.assertNotIn("None", str(raised.exception))
+
+    def test_stream_failure_preserves_provider_error_message(self):
+        with self.assertLogs("atelier_server.model", level="ERROR"):
+            with self.assertRaisesRegex(RuntimeError, "Provider unavailable") as raised:
+                self.run_stream([{"type": "response.failed", "response": {
+                    "status": "failed", "error": {"message": "Provider unavailable"},
+                }}], model="gpt-6-astra")
+        self.assertNotIn("HTTP 400", str(raised.exception))
 
     def test_context_budget_drops_old_history_and_omits_whole_files(self):
         files = {"index.html": "<html>Keep</html>", "large.txt": "x" * 20_000}

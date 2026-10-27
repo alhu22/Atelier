@@ -9,13 +9,10 @@ interface StudioDialogsProps {
   projectsOpen: boolean;
   renameOpen: boolean;
   fileOpen: boolean;
-  profileOpen: boolean;
   githubOpen: boolean;
   projects: StudioProject[];
   currentProjectId: string;
   currentProjectName: string;
-  userName: string;
-  photoURL: string;
   githubConfigured: boolean;
   githubConnected: boolean;
   githubLogin: string | null;
@@ -27,7 +24,6 @@ interface StudioDialogsProps {
   onAddFile: (path: string) => void;
   onSelectProject: (project: StudioProject) => void;
   onDeleteProject: (project: StudioProject) => void;
-  onProfileSave: (name: string, photo: string) => Promise<void>;
   onGitHubConnect: () => void;
   onGitHubDisconnect: () => Promise<void>;
   onGitHubRefresh: () => Promise<GitHubRepository[]>;
@@ -41,13 +37,10 @@ export function StudioDialogs(props: StudioDialogsProps) {
     projectsOpen,
     renameOpen,
     fileOpen,
-    profileOpen,
     githubOpen,
     projects,
     currentProjectId,
     currentProjectName,
-    userName,
-    photoURL,
     githubConfigured,
     githubConnected,
     githubLogin,
@@ -59,7 +52,6 @@ export function StudioDialogs(props: StudioDialogsProps) {
     onAddFile,
     onSelectProject,
     onDeleteProject,
-    onProfileSave,
     onGitHubConnect,
     onGitHubDisconnect,
     onGitHubRefresh,
@@ -69,16 +61,9 @@ export function StudioDialogs(props: StudioDialogsProps) {
   } = props;
   const [name, setName] = useState("");
   const [path, setPath] = useState("");
-  const [displayName, setDisplayName] = useState(userName);
-  const [photo, setPhoto] = useState(photoURL);
   const [repository, setRepository] = useState("");
   const [branch, setBranch] = useState("");
   const [submitting, setSubmitting] = useState(false);
-
-  useEffect(() => {
-    setDisplayName(userName);
-    setPhoto(photoURL);
-  }, [userName, photoURL]);
 
   useEffect(() => {
     setName(currentProjectName);
@@ -88,19 +73,6 @@ export function StudioDialogs(props: StudioDialogsProps) {
     if (!githubOpen || !githubConnected || githubRepositories.length > 0) return;
     void onGitHubRefresh().catch(() => undefined);
   }, [githubConnected, githubOpen, githubRepositories.length, onGitHubRefresh]);
-
-  async function handleProfile(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setSubmitting(true);
-    try {
-      await onProfileSave(displayName.trim(), photo.trim());
-      onClose();
-    } catch (error) {
-      onError(error instanceof Error ? error.message : "Could not save your profile.");
-    } finally {
-      setSubmitting(false);
-    }
-  }
 
   async function handleExport(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -221,42 +193,6 @@ export function StudioDialogs(props: StudioDialogsProps) {
           <div className="flex justify-end gap-2">
             <Button onClick={onClose}>Cancel</Button>
             <Button type="submit" variant="primary">Create file</Button>
-          </div>
-        </form>
-      </Dialog>
-
-      <Dialog open={profileOpen} onClose={onClose} title="My profile">
-        <DialogHeading onClose={onClose} title="My profile" />
-        <form className="space-y-4 p-5" onSubmit={handleProfile}>
-          {!userName && (
-            <p className="text-sm text-muted-foreground">
-              Sign in with Google to sync your profile and projects.
-            </p>
-          )}
-          <label className="block space-y-2 text-sm" htmlFor="profile-name">
-            Display name
-            <Input
-              autoComplete="name"
-              id="profile-name"
-              maxLength={120}
-              onChange={(event) => setDisplayName(event.target.value)}
-              value={displayName}
-            />
-          </label>
-          <label className="block space-y-2 text-sm" htmlFor="profile-photo">
-            Profile photo URL
-            <Input
-              id="profile-photo"
-              onChange={(event) => setPhoto(event.target.value)}
-              type="url"
-              value={photo}
-            />
-          </label>
-          <div className="flex justify-end gap-2">
-            <Button onClick={onClose}>Cancel</Button>
-            <Button disabled={submitting || !userName} type="submit" variant="primary">
-              Save profile
-            </Button>
           </div>
         </form>
       </Dialog>

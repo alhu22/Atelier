@@ -8,6 +8,8 @@ interface SidebarProps {
   avatar: string;
   photoURL: string;
   isAdmin: boolean;
+  signedIn: boolean;
+  signInDisabled: boolean;
   workspacePath: string;
   onNewProject: () => void;
   onProjects: () => void;
@@ -22,6 +24,8 @@ export function Sidebar({
   avatar,
   photoURL,
   isAdmin,
+  signedIn,
+  signInDisabled,
   workspacePath,
   onNewProject,
   onProjects,
@@ -84,10 +88,11 @@ export function Sidebar({
         <span aria-hidden="true">⚙</span> {!collapsed && "Settings"}
       </button>
       <button
-        aria-label="My profile"
+        aria-label={signedIn ? "My profile" : "Sign in with Google"}
+        disabled={!signedIn && signInDisabled}
         className={`mt-auto flex shrink-0 items-center rounded-lg text-left hover:bg-muted ${collapsed ? "justify-center py-3" : "gap-3 border border-border p-3"}`}
         onClick={onProfile}
-        title={`My profile — ${userLabel}`}
+        title={signedIn ? `My profile — ${userLabel}` : "Sign in with Google"}
         type="button"
       >
         <span className="grid size-9 shrink-0 place-items-center overflow-hidden rounded-full bg-muted text-xs font-semibold">
@@ -98,7 +103,7 @@ export function Sidebar({
           )}
         </span>
         {!collapsed && <span className="min-w-0">
-          <strong className="block text-xs">My profile</strong>
+          <strong className="block text-xs">{signedIn ? "My profile" : "Guest"}</strong>
           <span className="block truncate text-xs text-muted-foreground">
             {userLabel}
           </span>

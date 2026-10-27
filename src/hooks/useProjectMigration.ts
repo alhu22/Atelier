@@ -46,6 +46,7 @@ export function useProjectMigration(options: MigrationOptions) {
       await latest.current.onMigrated({
         ...latest.current.project,
         id: crypto.randomUUID(),
+        pendingCreation: true,
         name: `${latest.current.project.name.slice(0, 112)} (React)`,
         files: result.files,
         entrypoint: result.entrypoint,

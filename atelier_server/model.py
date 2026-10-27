@@ -70,16 +70,30 @@ def model_error(status, body, api_key, model_url, deployment=""):
     safe_body = body.replace(api_key, "[redacted]") if api_key else body
     if model_url:
         safe_body = safe_body.replace(model_url, "[configured endpoint]")
-    logging.getLogger(__name__).error("Azure OpenAI HTTP %s response: %s", status, safe_body)
+    label = f"HTTP {status} response" if status is not None else "stream error"
+    logging.getLogger(__name__).error("Azure OpenAI %s: %s", label, safe_body)
     try:
         parsed = json.loads(safe_body)
         if isinstance(parsed, dict) and isinstance(parsed.get("response"), dict):
             parsed = parsed["response"]
-        detail = parsed.get("error", parsed)
-        detail = str(detail.get("message") or safe_body) if isinstance(detail, dict) else str(detail)
+        incomplete = parsed.get("incomplete_details") or {}
+        reason = incomplete.get("reason") if isinstance(incomplete, dict) else None
+        if reason == "max_output_tokens":
+            detail = (
+                "Generation reached the output token limit before finishing. "
+                "Try a smaller request or increase MODEL_MAX_COMPLETION_TOKENS within your deployment's limits."
+            )
+        elif reason == "content_filter":
+            detail = "Generation was interrupted by the provider's content filter. Revise your request and try again."
+        elif parsed.get("status") == "incomplete" or reason:
+            detail = "Generation was incomplete" + (f" ({reason})" if reason else "") + ". Please retry."
+        else:
+            detail = parsed.get("error") or parsed
+            detail = str(detail.get("message") or detail.get("code") or "Unknown provider error. Please retry.") if isinstance(detail, dict) else str(detail)
     except (ValueError, AttributeError):
         detail = safe_body
-    message = f"Azure OpenAI returned HTTP {status}: {detail.strip() or 'Empty error response.'}"
+    prefix = f"Azure OpenAI returned HTTP {status}" if status is not None else "Azure OpenAI response failed"
+    message = f"{prefix}: {detail.strip() or 'Empty error response.'}"
     if status == 404:
         message += f" Check MODEL_URL, the MODEL_NAME deployment '{deployment}', and api-version for deployment-style URLs."
     return RuntimeError(message)

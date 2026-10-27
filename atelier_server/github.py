@@ -21,6 +21,11 @@ github_sessions = {}
 github_states = {}
 github_lock = threading.Lock()
 
+class GitHubAPIError(RuntimeError):
+    def __init__(self, status, message):
+        super().__init__(message)
+        self.status = status
+
 def github_configured():
     return bool(setting("GITHUB_CLIENT_ID") and setting("GITHUB_CLIENT_SECRET"))
 
@@ -44,7 +49,7 @@ def github_api_request(path, token, method="GET", body=None):
             message = error_data.get("message") if isinstance(error_data, dict) else None
         except (UnicodeDecodeError, json.JSONDecodeError):
             message = None
-        raise RuntimeError(message or "GitHub API returned HTTP " + str(error.code) + ".") from None
+        raise GitHubAPIError(error.code, message or "GitHub API returned HTTP " + str(error.code) + ".") from None
     except (URLError, TimeoutError, OSError):
         raise RuntimeError("Could not reach GitHub. Check your network connection and try again.") from None
     if not response_data:
@@ -96,12 +101,30 @@ def github_export(token, repository, branch, project_name, files):
         normalized[path] = base64.b64encode(file_bytes).decode("ascii")
 
     repository_info = github_api_request("/repos/" + repository, token)
-    branch = (branch or "").strip() or repository_info.get("default_branch")
+    branch = branch.strip() or repository_info.get("default_branch") or "main"
     if not isinstance(branch, str) or not branch:
-        raise RuntimeError("This repository has no default branch. Add an initial commit on GitHub first.")
+        raise RuntimeError("This repository returned an invalid default branch.")
     encoded_branch = "/".join(quote(part, safe="") for part in branch.split("/"))
     base_path = "/repos/" + repository
-    reference = github_api_request(base_path + "/git/ref/heads/" + encoded_branch, token)
+    result = {"message": "Exported " + str(len(normalized)) + " files to " + repository + " (" + branch + ")."}
+    commit_message = "Export " + (project_name or "Atelier project")
+    try:
+        reference = github_api_request(base_path + "/git/ref/heads/" + encoded_branch, token)
+    except GitHubAPIError as error:
+        if error.status != 409 or str(error).lower() != "git repository is empty.":
+            raise
+        # Git database writes require a first commit, created through the Contents API.
+        path = next(iter(normalized))
+        initial = github_api_request(
+            base_path + "/contents/" + quote(path, safe="/"),
+            token,
+            method="PUT",
+            body={"message": commit_message, "content": normalized[path], "branch": branch},
+        )
+        del normalized[path]
+        if not normalized:
+            return result
+        reference = {"object": {"sha": initial["commit"]["sha"]}}
     parent = github_api_request(base_path + "/git/commits/" + reference["object"]["sha"], token)
     tree = []
     for path, content in normalized.items():
@@ -123,7 +146,7 @@ def github_export(token, repository, branch, project_name, files):
         token,
         method="POST",
         body={
-            "message": "Export " + (project_name or "Atelier project"),
+            "message": commit_message,
             "tree": next_tree["sha"],
             "parents": [parent["sha"]],
         },
@@ -134,4 +157,4 @@ def github_export(token, repository, branch, project_name, files):
         method="PATCH",
         body={"sha": commit["sha"], "force": False},
     )
-    return {"message": "Exported " + str(len(normalized)) + " files to " + repository + " (" + branch + ")."}
+    return result

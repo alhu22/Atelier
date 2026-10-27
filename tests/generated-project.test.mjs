@@ -70,15 +70,22 @@ async function previewFrame(page, html = compiled) {
   await page.setContent('<style>body{margin:0}</style><iframe title="Generated website" sandbox="allow-scripts" style="display:block;width:100%;height:900px;border:0"></iframe>');
   await page.locator("iframe").evaluate((frame, source) => { frame.srcdoc = source; }, html);
   const frame = page.frameLocator("iframe");
-  await frame.getByRole("heading", { name: /STOR SMAK/ }).waitFor();
+  await frame.getByRole("heading", { name: /Your new website/ }).waitFor();
   return frame;
 }
 
 // Some headless CI hosts do not deliver animation frames; native clicks still work.
 const click = (locator) => locator.click({ force: true });
 
+async function selectDevice(page, device) {
+  await click(page.locator('.project-header button[aria-controls="preview-devices"]'));
+  await click(page.getByRole("group", { name: "Preview devices" }).getByRole("button", {
+    name: device[0].toUpperCase() + device.slice(1), exact: true,
+  }));
+}
+
 test("delivered source passes strict types; invalid imports and types fail", async () => {
-  assert.match(compiled, /STOR SMAK/);
+  assert.match(compiled, /Your new website/);
   assert.throws(() => checkProjectTypes({
     ...files, "src/types/broken.ts": "export const count: number = 'wrong';",
   }), /not assignable/);
@@ -101,71 +108,64 @@ test("preview refuses executable configuration and unavailable dependencies", as
     ...files, "src/main.tsx": 'import "unavailable-package";',
   }), /not available/);
   const safe = await compileProject({ ...files, "vite.config.ts": "throw new Error('MUST NOT RUN');" });
-  assert.match(safe, /STOR SMAK/);
+  assert.match(safe, /Your new website/);
 });
 
-test("Kebabhouse fits desktop, tablet and mobile with working navigation and bundled artwork", async () => {
+test("preview preserves remote CSS imports and asset URLs", async () => {
+  const fontUrl = "https://fonts.googleapis.com/css2?family=DM+Sans&display=swap";
+  const stylesheetUrl = "//example.invalid/print.css";
+  const imageUrl = "https://example.invalid/clay.jpg";
+  const html = await compileProject({
+    ...files,
+    "src/styles/globals.css": `@import url("${fontUrl}");
+      @import "${stylesheetUrl}" print;
+      body { background-image: url("${imageUrl}"); }
+      ${files["src/styles/globals.css"]}`,
+  }, true);
+  const css = html.match(/<style>([\s\S]*?)<\/style>/)?.[1];
+  assert.ok(css);
+  assert.ok(css.includes(fontUrl));
+  assert.match(css, /@import[^;]*\/\/example\.invalid\/print\.css[^;]*print;/);
+  assert.ok(css.includes(imageUrl));
+  assert.match(html, /Your new website/);
+});
+
+test("preview still rejects remote JavaScript imports", async () => {
+  for (const url of ["https://example.invalid/module.js", "//example.invalid/module.js", "data:text/javascript,export default 1"]) {
+    for (const source of [`import "${url}";`, `import("${url}");`]) {
+      await assert.rejects(compileProject({
+        ...files, "src/main.tsx": source,
+      }), /Remote code imports are not supported/);
+    }
+  }
+});
+
+test("neutral starter is centered and responsive without external assets", async () => {
   const { context, page } = await isolatedPage();
   try {
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message));
     const frame = await previewFrame(page);
-    assert.equal(await frame.getByRole("navigation").getByRole("link").count(), 4);
-    assert.equal(await frame.locator("body").evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(246, 241, 231)");
-    assert.equal(await frame.getByRole("link", { name: "Se vår meny" }).evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(168, 62, 44)");
+    assert.equal(await frame.locator("img, svg, link[href^='http']").count(), 0);
+    assert.equal(await frame.locator("body").evaluate((el) => getComputedStyle(el).backgroundColor), "rgb(250, 250, 250)");
+    await frame.getByText("Describe what you want to build in the chat and I'll make it real.").waitFor();
     for (const width of [1440, 1024, 768, 700, 390, 320]) {
       await page.setViewportSize({ width, height: 900 });
-      const layout = await frame.locator("#hem").evaluate((hero) => {
-        const bounds = (element) => {
-          const { top, right, bottom, left } = element.getBoundingClientRect();
-          return { top, right, bottom, left };
-        };
+      const layout = await frame.locator(".hero").evaluate((hero) => {
         const title = hero.querySelector("h1");
-        const image = hero.querySelector("img");
+        const bounds = hero.firstElementChild.getBoundingClientRect();
         return {
-          columns: getComputedStyle(hero).gridTemplateColumns.split(" ").length,
           overflow: document.documentElement.scrollWidth > innerWidth,
-          hero: bounds(hero), title: bounds(title), image: bounds(image),
-          badge: bounds(hero.querySelector(".hero-badge")),
-          loaded: image.complete && image.naturalWidth > 0,
-          titleSize: [title.scrollHeight, title.clientHeight, title.scrollWidth, title.clientWidth],
+          centerX: (bounds.left + bounds.right) / 2,
+          centerY: (bounds.top + bounds.bottom) / 2,
           clipped: title.scrollHeight > title.clientHeight + 1 || title.scrollWidth > title.clientWidth + 1,
         };
       });
-      assert.equal(layout.columns, width <= 700 ? 1 : 2, `columns at ${width}`);
       assert.equal(layout.overflow, false, `horizontal overflow at ${width}`);
       assert.equal(layout.clipped, false, `headline clipping at ${width}: ${JSON.stringify(layout)}`);
-      assert.ok(layout.title.bottom < layout.hero.bottom);
-      assert.ok(layout.loaded);
-      for (const edge of ["top", "left"]) assert.ok(layout.badge[edge] >= layout.image[edge], `${edge} badge inset at ${width}`);
-      for (const edge of ["bottom", "right"]) assert.ok(layout.badge[edge] <= layout.image[edge], `${edge} badge inset at ${width}`);
-      if (width <= 700) assert.ok(layout.image.top > layout.title.bottom);
-      assert.equal(await frame.getByRole("button", { name: "Öppna menyn" }).isVisible(), width <= 700);
+      assert.ok(Math.abs(layout.centerX - width / 2) <= 1);
+      assert.ok(Math.abs(layout.centerY - 450) <= 1);
     }
-    const menuToggle = frame.getByRole("button", { name: "Öppna menyn" });
-    await menuToggle.focus();
-    await menuToggle.press("Enter");
-    assert.equal(await frame.getByRole("navigation").isVisible(), true);
-    await frame.getByRole("button", { name: "Stäng menyn" }).press("Escape");
-    assert.equal(await frame.getByRole("navigation").isVisible(), false);
-    for (const [label, id] of [["Om oss", "om-oss"], ["Mer", "mer"], ["Beställ online", "bestall"], ["Hem", "hem"]]) {
-      await click(frame.getByRole("button", { name: "Öppna menyn" }));
-      await click(frame.getByRole("navigation").getByRole("link", { name: label, exact: true }));
-      assert.equal(await frame.getByRole("navigation").isVisible(), false);
-      assert.equal(await frame.locator(`#${id}`).evaluate((element) => document.activeElement === element), true);
-      assert.ok(await frame.locator(`#${id}`).evaluate((element) => {
-        const bounds = element.getBoundingClientRect();
-        return bounds.top < innerHeight && bounds.bottom > 0;
-      }));
-    }
-    for (const link of await frame.locator('a[href^="#"]').all()) {
-      const href = await link.getAttribute("href");
-      assert.equal(await frame.locator(href).count(), 1, `${href} resolves`);
-    }
-    await click(frame.getByRole("link", { name: "Se vår meny" }));
-    assert.ok(await frame.locator("#meny").evaluate((element) => Math.abs(element.getBoundingClientRect().top - 24) <= 1));
-    await click(frame.getByRole("link", { name: "Till toppen" }));
-    assert.equal(await frame.locator("#hem").evaluate((element) => document.activeElement === element), true);
     assert.deepEqual(errors, []);
   } finally { await context.close(); }
 });
@@ -175,7 +175,7 @@ test("follow-up route, hook interaction and local SVG work in compiled preview",
   next["src/hooks/useCounter.ts"] = 'import { useState } from "react"; export function useCounter() { const [count, setCount] = useState(0); return { count, increment: () => setCount(value => value + 1) }; }';
   next["src/pages/Counter.tsx"] = 'import { useCounter } from "@/hooks/useCounter"; export function Counter() { const {count, increment} = useCounter(); return <button onClick={increment}>Count {count}</button>; }';
   next["src/app/router.tsx"] = 'import { Counter } from "@/pages/Counter";\n' + next["src/app/router.tsx"].replace("{ index: true", '{ path: "counter", element: <Counter /> }, { index: true');
-  next["src/components/layout/Navbar.tsx"] = next["src/components/layout/Navbar.tsx"].replace("</nav>", '<Link to="/counter">Counter</Link><Link to="/missing">Missing</Link></nav>');
+  next["src/components/layout/Navbar.tsx"] = 'import { Link } from "react-router-dom"; export function Navbar() { return <nav><Link to="/counter">Counter</Link><Link to="/missing">Missing</Link></nav>; }';
   next["public/assets/mark.svg"] = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="green"/></svg>';
   next["src/components/sections/HeroSection.tsx"] = next["src/components/sections/HeroSection.tsx"].replace("<div>", '<div><img src="/assets/mark.svg" alt="Local mark" />');
   const html = await compileProject(next, true);
@@ -187,17 +187,25 @@ test("follow-up route, hook interaction and local SVG work in compiled preview",
     await click(frame.getByRole("button", { name: "Count 0" }));
     await frame.getByRole("button", { name: "Count 1" }).waitFor();
     await click(frame.getByRole("link", { name: "Missing", exact: true }));
-    await frame.getByRole("heading", { name: "Sidan hittades inte" }).waitFor();
-    await click(frame.getByRole("link", { name: "Till startsidan" }));
-    await frame.getByRole("heading", { name: /STOR SMAK/ }).waitFor();
+    await frame.getByRole("heading", { name: "Page not found" }).waitFor();
+    await click(frame.getByRole("link", { name: "Back to home" }));
+    await frame.getByRole("heading", { name: /Your new website/ }).waitFor();
   } finally { await context.close(); }
 });
 
 test("native internal navigation stays in the sandbox and broken routes render recoverable errors", async () => {
   const next = { ...files };
   next["src/components/layout/Navbar.tsx"] = `export function Navbar() {
-    return <nav>{[["/#hem", "Hem"], ["/#om-oss", "Om oss"], ["/mer", "Mer"], ["/bestall", "Beställ online"], ["/broken", "Broken"], ["/missing", "Missing"]].map(([href, text]) => <a key={href} href={href}>{text}</a>)}</nav>;
+    return <nav>{[["/#intro", "Intro"], ["/#details", "Details"], ["/broken", "Broken"], ["/missing", "Missing"]].map(([href, text]) => <a key={href} href={href}>{text}</a>)}</nav>;
   }`;
+  next["src/pages/Index.tsx"] = `import { useEffect } from "react";
+    import { useLocation } from "react-router-dom";
+    import { HeroSection } from "@/components/sections/HeroSection";
+    export function Index() {
+      const { hash } = useLocation();
+      useEffect(() => { document.getElementById(hash.slice(1))?.focus(); }, [hash]);
+      return <><HeroSection /><section id="intro" tabIndex={-1}>Intro</section><section id="details" tabIndex={-1}>Details</section></>;
+    }`;
   next["src/pages/Broken.tsx"] = 'export function Broken(): never { throw new Error("Broken route fixture"); }';
   next["src/app/router.tsx"] = 'import { Broken } from "@/pages/Broken";\n' + next["src/app/router.tsx"].replace(
     "{ index: true", '{ path: "broken", element: <Broken /> }, { index: true');
@@ -205,7 +213,7 @@ test("native internal navigation stays in the sandbox and broken routes render r
   const { context, page } = await isolatedPage();
   try {
     const frame = await previewFrame(page, html);
-    for (const [label, id] of [["Om oss", "om-oss"], ["Mer", "mer"], ["Beställ online", "bestall"], ["Hem", "hem"]]) {
+    for (const [label, id] of [["Details", "details"], ["Intro", "intro"]]) {
       const link = frame.getByRole("link", { name: label, exact: true });
       await link.focus();
       await link.press("Enter");
@@ -213,12 +221,12 @@ test("native internal navigation stays in the sandbox and broken routes render r
       assert.notEqual(page.frames()[1].url(), "about:blank#blocked");
     }
     await click(frame.getByRole("link", { name: "Missing", exact: true }));
-    await frame.getByRole("heading", { name: "Sidan hittades inte" }).waitFor();
-    await click(frame.getByRole("link", { name: "Till startsidan" }));
+    await frame.getByRole("heading", { name: "Page not found" }).waitFor();
+    await click(frame.getByRole("link", { name: "Back to home" }));
     await click(frame.getByRole("link", { name: "Broken", exact: true }));
-    await frame.getByRole("heading", { name: "Sidan kunde inte visas" }).waitFor();
-    await click(frame.getByRole("link", { name: "Till startsidan" }));
-    await frame.getByRole("heading", { name: /STOR SMAK/ }).waitFor();
+    await frame.getByRole("heading", { name: "Unable to display this page" }).waitFor();
+    await click(frame.getByRole("link", { name: "Back to home" }));
+    await frame.getByRole("heading", { name: /Your new website/ }).waitFor();
   } finally { await context.close(); }
 });
 
@@ -270,7 +278,7 @@ test("builder initializes and ZIP-exports actual React source, not its own front
   try {
     await mockApi(page, () => assert.fail("React starter must not request migration"));
     await page.goto(base);
-    await page.frameLocator('iframe[title="Website preview"]').getByRole("heading", { name: /STOR SMAK/ }).waitFor();
+    await page.frameLocator('iframe[title="Website preview"]').getByRole("heading", { name: /Your new website/ }).waitFor();
     const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("atelier-studio-project-v1:local:current")));
     assert.deepEqual(Object.keys(stored.files).sort(), Object.keys(files).sort());
     const [download] = await Promise.all([
@@ -281,6 +289,85 @@ test("builder initializes and ZIP-exports actual React source, not its own front
     assert.equal(await archive.file("src/pages/Index.tsx").async("string"), files["src/pages/Index.tsx"]);
     assert.ok(archive.file("package.json"));
     assert.equal(archive.file("src/hooks/useStudio.ts"), null);
+  } finally { await context.close(); }
+});
+
+test("Shared editor header controls full-width preview, code editing and accessible device selection", async () => {
+  const { context, page } = await isolatedPage();
+  try {
+    await mockApi(page, () => assert.fail("React starter must not request migration"));
+    await page.goto(base);
+    const header = page.locator(".project-header");
+    const iframe = page.locator('iframe[title="Website preview"]');
+    await iframe.waitFor();
+    assert.equal(await page.getByRole("button", { name: /^(Undo|Redo)$/ }).count(), 0);
+    assert.equal(await header.getByRole("button", { name: "preview", exact: true }).getAttribute("aria-pressed"), "true");
+    assert.equal(await page.getByRole("tree", { name: "Project files" }).isVisible(), false);
+    assert.equal(await page.getByRole("textbox", { name: "Selected project file source" }).count(), 0);
+    const headerBounds = await header.boundingBox();
+    const previewBounds = await iframe.boundingBox();
+    assert.equal(previewBounds.y, headerBounds.y + headerBounds.height);
+    assert.equal(previewBounds.x, headerBounds.x);
+    assert.equal(previewBounds.width, headerBounds.width);
+    const device = header.locator('button[aria-controls="preview-devices"]');
+    assert.equal(await device.getAttribute("title"), "Desktop");
+    assert.equal(await device.innerText(), "");
+    assert.equal(await page.getByRole("group", { name: "Preview devices" }).count(), 0);
+    const bounds = await device.boundingBox();
+    await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+    const options = page.getByRole("group", { name: "Preview devices" });
+    await options.waitFor();
+    assert.equal(await options.getByRole("button").count(), 3);
+    await click(options.getByRole("button", { name: "Mobile", exact: true }));
+    assert.equal(await device.getAttribute("aria-label"), "Mobile");
+    assert.equal(await options.count(), 0);
+    await page.waitForFunction(() =>
+      document.querySelector('iframe[title="Website preview"]').getBoundingClientRect().width === 390,
+      undefined, { polling: 100 });
+    await device.press("Enter");
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Enter");
+    assert.equal(await device.getAttribute("title"), "Tablet");
+    await device.press("Enter");
+    await page.keyboard.press("Escape");
+    assert.equal(await options.count(), 0);
+    assert.equal(await device.evaluate(el => el === document.activeElement), true);
+    await click(header.getByRole("button", { name: "code", exact: true }));
+    assert.equal(await device.count(), 0);
+    assert.equal(await iframe.count(), 0);
+    const tree = page.getByRole("tree", { name: "Project files" });
+    await click(tree.getByTitle("README.md", { exact: true }));
+    const editor = page.getByRole("textbox", { name: "Selected project file source" });
+    assert.equal((await editor.boundingBox()).y, headerBounds.y + headerBounds.height);
+    assert.equal(await editor.inputValue(), await page.evaluate(() =>
+      JSON.parse(localStorage.getItem("atelier-studio-project-v1:local:current")).files["README.md"]));
+    await editor.fill("# Edited documentation");
+    await click(page.getByRole("button", { name: "Apply changes" }));
+    await iframe.waitFor();
+    assert.equal(await tree.isVisible(), false);
+    assert.equal(await device.getAttribute("title"), "Tablet");
+    await click(header.getByRole("button", { name: "code", exact: true }));
+    assert.equal(await editor.inputValue(), "# Edited documentation");
+    await click(header.getByRole("button", { name: "preview", exact: true }));
+    for (const name of ["A different project", "LongProjectName".repeat(12)]) {
+      await click(header.getByTitle("Rename project"));
+      const dialog = page.getByRole("dialog", { name: "Rename project" });
+      await dialog.getByLabel("Project name").fill(name);
+      await click(dialog.getByRole("button", { name: "Save name", exact: true }));
+      for (const width of [1400, 768, 390, 320]) {
+        await page.setViewportSize({ width, height: 900 });
+        await page.evaluate(() => window.dispatchEvent(new Event("resize")));
+        assert.equal(await header.evaluate(el => el.scrollWidth <= el.clientWidth), true);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+        assert.equal(await header.getByRole("button", { name: "code", exact: true }).isVisible(), true);
+        await selectDevice(page, "desktop");
+        assert.equal(await header.getByRole("button", { name: "GitHub", exact: true }).isVisible(), true);
+        assert.equal(await header.getByRole("button", { name: "↓ ZIP" }).isVisible(), true);
+      }
+      assert.equal(await header.getByTitle("Rename project").locator("span").first().evaluate(el =>
+        getComputedStyle(el).textOverflow === "ellipsis"), true);
+    }
   } finally { await context.close(); }
 });
 
@@ -338,12 +425,14 @@ test("Files panel persists its width and tree supports nested keyboard navigatio
     assert.equal(await item("src/components/sections").getAttribute("aria-expanded"), "true");
     await click(toggle);
     await page.reload();
+    await click(page.getByRole("button", { name: "code", exact: true }));
     assert.equal(await toggle.getAttribute("aria-expanded"), "false");
     await click(toggle);
     assert.equal(await item("src/components/sections").getAttribute("aria-expanded"), "true");
     assert.equal(await item("src/components/sections/HeroSection.tsx").getAttribute("aria-selected"), "true");
     assert.equal(await item("src/app").getAttribute("aria-expanded"), "false");
     await page.reload();
+    await click(page.getByRole("button", { name: "code", exact: true }));
     assert.equal(await toggle.getAttribute("aria-expanded"), "true");
   } finally { await context.close(); }
 });
@@ -352,13 +441,18 @@ test("Builder preview grows to page content without nested scrolling at each dev
   const { context, page } = await isolatedPage();
   try {
     await mockApi(page, () => assert.fail("React starter must not request migration"));
+    const tall = await compileProject({
+      ...files,
+      "src/styles/globals.css": files["src/styles/globals.css"] + "\n.hero { min-height: 1400px; }\n",
+    });
+    await page.route("**/api/preview", (route) => route.fulfill({ json: { html: tall } }));
     await page.goto(base);
     const iframe = page.locator('iframe[title="Website preview"]');
     await iframe.waitFor();
     const frame = await (await iframe.elementHandle()).contentFrame();
-    await frame.getByRole("heading", { name: /STOR SMAK/ }).waitFor();
+    await frame.getByRole("heading", { name: /Your new website/ }).waitFor();
     for (const device of ["desktop", "tablet", "mobile", "desktop"]) {
-      await click(page.getByRole("button", { name: device, exact: true }));
+      await selectDevice(page, device);
       try {
         await frame.waitForFunction(() =>
           innerHeight > 1000 && document.documentElement.scrollHeight <= innerHeight + 1,
@@ -377,11 +471,10 @@ test("Builder preview grows to page content without nested scrolling at each dev
       ), false);
       assert.equal(await frame.locator("html").evaluate((el) => el.scrollWidth <= innerWidth), true);
     }
-    await click(page.getByRole("button", { name: "Toggle files panel" }));
-    await frame.waitForFunction(() => document.documentElement.scrollHeight <= innerHeight + 1, undefined, { polling: 100 });
+    assert.equal(await page.getByRole("button", { name: "Toggle files panel" }).isVisible(), false);
     await click(page.getByRole("button", { name: "code", exact: true }));
     await click(page.getByRole("button", { name: "preview", exact: true }));
-    await page.frameLocator('iframe[title="Website preview"]').getByRole("heading", { name: /STOR SMAK/ }).waitFor();
+    await page.frameLocator('iframe[title="Website preview"]').getByRole("heading", { name: /Your new website/ }).waitFor();
   } finally { await context.close(); }
 });
 
@@ -406,7 +499,6 @@ test("Builder columns collapse independently, persist and preserve chat drafts a
     const input = chat.getByRole("textbox");
     const preview = page.locator('iframe[title="Website preview"]');
     await preview.waitFor();
-    const source = await preview.getAttribute("srcdoc");
     const bounds = async () => Promise.all([sidebar, chat, project].map((item) => item.boundingBox()));
     const [initialSidebar, initialChat, initialProject] = await bounds();
     assert.equal(initialSidebar.x, 0);
@@ -452,8 +544,8 @@ test("Builder columns collapse independently, persist and preserve chat drafts a
     await click(chatToggle);
     await page.reload();
     assert.equal(await chatToggle.getAttribute("aria-expanded"), "true");
-    await preview.waitFor();
-    assert.equal(await preview.getAttribute("srcdoc"), source);
+    await page.locator(".building-view").getByRole("button", { name: "Retry", exact: true }).waitFor();
+    assert.equal(await preview.count(), 0);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   } finally { await context.close(); }
 });
@@ -493,6 +585,220 @@ async function chatEvent(page, event) {
   await page.evaluate((value) => window.chatRequests.at(-1).emit(value), event);
 }
 
+test("Chat loading animations pulse, reveal dots sequentially, reset together and respect reduced motion", async () => {
+  const { context, page } = await isolatedPage();
+  try {
+    await mockChatStream(page);
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    await page.goto(base);
+    const chat = page.locator("#workspace-chat");
+    const input = chat.getByRole("textbox");
+    await input.fill("Build a bakery website");
+    await input.press("Enter");
+    const stop = chat.getByRole("button", { name: "Stop response" });
+    await stop.waitFor();
+    const indicator = chat.locator(".chat-typing-indicator");
+    const samples = await indicator.evaluate((element) => {
+      const dots = [...element.querySelectorAll(".chat-typing-dot")];
+      const animations = element.getAnimations({ subtree: true });
+      animations.forEach((animation) => animation.pause());
+      return [0, 1600, 3200].map((cycle) =>
+        [150, 400, 650, 999, 1000, 1500].map((time) => {
+          animations.forEach((animation) => { animation.currentTime = cycle + time; });
+          return dots.map((dot) => Number(getComputedStyle(element).opacity) * Number(getComputedStyle(dot).opacity));
+        }));
+    });
+    for (const cycle of samples) {
+      assert.deepEqual(cycle, [[1, 0, 0], [1, 1, 0], [1, 1, 1], [1, 1, 1], [0, 0, 0], [0, 0, 0]]);
+    }
+    assert.deepEqual(await stop.evaluate((element) => {
+      const animation = element.getAnimations().find((item) => item.animationName === "chat-send-pulse");
+      animation.pause();
+      return [0, 600, 1200].map((time) => {
+        animation.currentTime = time;
+        return new DOMMatrix(getComputedStyle(element).transform).a;
+      });
+    }), [1, 1.12, 1]);
+
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    assert.equal(await stop.evaluate((element) => element.getAnimations().filter((item) => item.animationName === "chat-send-pulse").length), 0);
+    assert.deepEqual(await indicator.evaluate((element) => ({
+      animations: element.getAnimations({ subtree: true }).length,
+      opacity: [element, ...element.querySelectorAll(".chat-typing-dot")].map((item) => getComputedStyle(item).opacity),
+    })), { animations: 0, opacity: ["1", "1", "1", "1"] });
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+
+    for (const outcome of ["complete", "cancel", "error"]) {
+      if (outcome === "complete") await chatEvent(page, { type: "done", project: null });
+      else if (outcome === "cancel") await click(stop);
+      else await chatEvent(page, { type: "error", error: "Request failed" });
+      const send = chat.getByRole("button", { name: "Send message", exact: true });
+      await send.waitFor();
+      assert.equal(await chat.locator(".is-loading, .chat-typing-dot").count(), 0);
+      assert.equal(await send.evaluate((element) => element.getAnimations().filter((item) => item.animationName === "chat-send-pulse").length), 0);
+      if (outcome !== "error") {
+        await input.fill("Try another design");
+        await input.press("Enter");
+        await stop.waitFor();
+        assert.equal(await stop.evaluate((element) => element.getAnimations().filter((item) => item.animationName === "chat-send-pulse").length), 1);
+      }
+    }
+  } finally { await context.close(); }
+});
+
+test("First prompt replaces the starter with streamed build progress, then reveals the site and keeps follow-ups live", async () => {
+  const { context, page } = await isolatedPage();
+  try {
+    await mockChatStream(page);
+    await page.goto(base);
+    const iframe = page.locator('iframe[title="Website preview"]');
+    await page.frameLocator('iframe[title="Website preview"]').getByRole("heading", { name: /Your new website/ }).waitFor();
+    const input = page.locator("#workspace-chat").getByRole("textbox");
+    const prompt = "A quiet, gallery-like portfolio for a ceramic artist. ".repeat(12);
+    await input.fill(prompt);
+    await input.press("Enter");
+    const building = page.locator(".building-view");
+    await building.getByRole("heading", { name: "Bringing your idea to life" }).waitFor();
+    assert.equal(await iframe.count(), 0);
+    assert.equal(await building.locator("blockquote").getAttribute("title"), prompt.trim());
+    assert.match(await building.locator('[aria-current="step"]').innerText(), /Understanding/);
+    await chatEvent(page, { type: "delta", text: "I am designing your portfolio." });
+    await building.locator('[aria-current="step"]').filter({ hasText: "Designing layout" }).waitFor();
+    await chatEvent(page, { type: "delta", text: "Working on the content. ".repeat(40) });
+    await building.locator('[aria-current="step"]').filter({ hasText: "Writing the content" }).waitFor();
+    for (const device of ["tablet", "mobile", "desktop"]) {
+      await selectDevice(page, device);
+      const bounds = await building.boundingBox();
+      const canvas = await page.locator(".preview-canvas").boundingBox();
+      assert.ok(bounds.height >= canvas.height - 42, `${device}: building fills the canvas`);
+      assert.equal(await building.evaluate(el => el.scrollWidth <= el.clientWidth), true);
+      assert.ok(await building.locator("blockquote p").evaluate(el =>
+        el.clientHeight <= parseFloat(getComputedStyle(el).lineHeight) * 3 + 1));
+    }
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    assert.equal(await building.locator(".building-dot").evaluate(el => getComputedStyle(el).animationName), "none");
+    assert.equal(await building.locator(".building-skeleton").evaluate(el => getComputedStyle(el, "::after").animationName), "none");
+    await page.evaluate(() => {
+      document.documentElement.style.setProperty("--surface", "0 0% 100%");
+      document.documentElement.style.setProperty("--foreground", "140 8% 8%");
+    });
+    assert.equal(await building.evaluate(el => getComputedStyle(el).backgroundColor), "rgb(255, 255, 255)");
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    let releasePreview;
+    const compiledRequest = new Promise(resolve => { releasePreview = resolve; });
+    let compilationRequested;
+    const startedCompilation = new Promise(resolve => { compilationRequested = resolve; });
+    await page.route("**/api/preview", async route => {
+      compilationRequested();
+      await compiledRequest;
+      await route.fulfill({ json: { html: "<!doctype html><html><body><h1>Ceramic portfolio</h1></body></html>" } });
+    });
+    const updated = { ...files, "src/pages/Index.tsx": files["src/pages/Index.tsx"] + "\n// Generated portfolio\n" };
+    await page.getByTitle("Rename project").filter({ hasText: "Untitled project" }).waitFor();
+    await chatEvent(page, { type: "done", project: { name: "Ceramic Studio", files: updated, entrypoint: "index.html" } });
+    await page.getByTitle("Rename project").filter({ hasText: "Ceramic Studio" }).waitFor();
+    await startedCompilation;
+    await building.locator('[aria-current="step"]').filter({ hasText: "Putting the pages together" }).waitFor();
+    assert.equal(await iframe.count(), 0, "Do not reveal the cached starter while compiling");
+    releasePreview();
+    await page.frameLocator('iframe[title="Website preview"]').getByRole("heading", { name: "Ceramic portfolio" }).waitFor();
+    await page.locator(".preview-reveal.is-ready").waitFor();
+    assert.match(await iframe.evaluate(el => getComputedStyle(el).transitionDuration), /0.3s/);
+    await building.waitFor({ state: "hidden" });
+    const source = await iframe.getAttribute("srcdoc");
+    await input.fill("Make the headings larger");
+    await input.press("Enter");
+    await page.getByRole("status").filter({ hasText: "Updating…" }).waitFor();
+    assert.equal(await building.count(), 0);
+    assert.equal(await iframe.getAttribute("srcdoc"), source);
+    let releaseUpdate;
+    const updateReady = new Promise(resolve => { releaseUpdate = resolve; });
+    let updateRequested;
+    const updateStarted = new Promise(resolve => { updateRequested = resolve; });
+    await page.route("**/api/preview", async route => {
+      updateRequested();
+      await updateReady;
+      await route.fulfill({ json: { html: "<!doctype html><html><body><h1>Updated portfolio</h1></body></html>" } });
+    });
+    await chatEvent(page, { type: "done", project: { name: "Larger Headings", files: { ...updated, "src/pages/Index.tsx": updated["src/pages/Index.tsx"] + "\n// Larger headings\n" }, entrypoint: "index.html" } });
+    await updateStarted;
+    assert.equal(await iframe.getAttribute("srcdoc"), source, "Keep the live site while recompiling a follow-up");
+    assert.equal(await building.count(), 0);
+    await page.getByRole("status").filter({ hasText: "Updating…" }).waitFor();
+    releaseUpdate();
+    await page.frameLocator('iframe[title="Website preview"]').getByRole("heading", { name: "Updated portfolio" }).waitFor();
+    await page.getByRole("status").filter({ hasText: "Updating…" }).waitFor({ state: "hidden" });
+    const updatedSource = await iframe.getAttribute("srcdoc");
+    await input.fill("Try another palette");
+    await input.press("Enter");
+    await page.waitForFunction(() => window.chatRequests.length === 3);
+    await chatEvent(page, { type: "error", error: "The request timed out" });
+    await page.getByRole("status").filter({ hasText: "Updating…" }).waitFor({ state: "hidden" });
+    assert.equal(await iframe.getAttribute("srcdoc"), updatedSource);
+    await page.reload();
+    await page.frameLocator('iframe[title="Website preview"]').getByRole("heading", { name: "Updated portfolio" }).waitFor();
+    await page.getByTitle("Rename project").filter({ hasText: "Ceramic Studio" }).waitFor();
+    await click(page.getByRole("button", { name: "Projects", exact: true }));
+    await page.getByRole("button", { name: /Ceramic Studio.*files/ }).waitFor();
+    assert.equal(await building.count(), 0, "Existing generated projects do not re-enter the first-build view");
+  } finally { await context.close(); }
+});
+
+test("First prototype preserves a manual name set during generation", async () => {
+  const { context, page } = await isolatedPage();
+  try {
+    await mockChatStream(page);
+    await page.goto(base);
+    const input = page.locator("#workspace-chat").getByRole("textbox");
+    await input.fill("Build a ceramic artist portfolio");
+    await input.press("Enter");
+    await page.waitForFunction(() => window.chatRequests.length === 1);
+    await click(page.getByTitle("Rename project"));
+    const dialog = page.getByRole("dialog", { name: "Rename project" });
+    await dialog.getByLabel("Project name").fill("My Pottery");
+    await click(dialog.getByRole("button", { name: "Save name", exact: true }));
+    await chatEvent(page, { type: "done", project: {
+      name: "Ceramic Studio", files: { ...files, "src/pages/Index.tsx": files["src/pages/Index.tsx"] + "\n// Portfolio\n" }, entrypoint: "index.html",
+    } });
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem("atelier-studio-project-v1:local:current"))?.generated);
+    await page.reload();
+    await page.getByTitle("Rename project").filter({ hasText: "My Pottery" }).waitFor();
+  } finally { await context.close(); }
+});
+
+test("First-build errors, stopped streams and reloads retain the prompt and retry without duplicating it", async () => {
+  const { context, page } = await isolatedPage();
+  try {
+    await mockChatStream(page);
+    await page.goto(base);
+    const chat = page.locator("#workspace-chat");
+    await click(chat.getByRole("button", { name: suggestionsForTest }));
+    await page.waitForFunction(() => window.chatRequests.length === 1);
+    await chatEvent(page, { type: "error", error: "The request timed out" });
+    const building = page.locator(".building-view");
+    await building.getByRole("alert").filter({ hasText: "Something went wrong while building. Try again" }).waitFor();
+    assert.match(await building.locator("blockquote").innerText(), /neighborhood bakery/);
+    assert.equal(await page.locator('iframe[title="Website preview"]').count(), 0);
+    await click(building.getByRole("button", { name: "Retry", exact: true }));
+    await page.waitForFunction(() => window.chatRequests.length === 2);
+    assert.equal(await page.evaluate(() => window.chatRequests[1].body.prompt), suggestionsForTest);
+    assert.equal(await chat.getByRole("article", { name: "Your message" }).count(), 1);
+    await building.getByRole("list", { name: "Build progress" }).waitFor();
+    await page.evaluate(() => window.chatRequests.at(-1).end());
+    await building.getByRole("alert").waitFor();
+    await page.reload();
+    await building.getByRole("alert").waitFor();
+    assert.equal(await page.locator('iframe[title="Website preview"]').count(), 0);
+    assert.match(await building.locator("blockquote").innerText(), /neighborhood bakery/);
+    await click(building.getByRole("button", { name: "Retry", exact: true }));
+    await page.waitForFunction(() => window.chatRequests.length === 1);
+    await click(chat.getByRole("button", { name: "Stop response" }));
+    await building.getByRole("alert").waitFor();
+    await click(chat.getByRole("button", { name: "New chat", exact: true }));
+    await page.frameLocator('iframe[title="Website preview"]').getByRole("heading", { name: /Your new website/ }).waitFor();
+  } finally { await context.close(); }
+});
+
 test("Chat sends suggestions, streams Markdown, applies files and supports editing, retry and stop", async () => {
   const { context, page } = await isolatedPage();
   try {
@@ -501,8 +807,20 @@ test("Chat sends suggestions, streams Markdown, applies files and supports editi
     const chat = page.locator("#workspace-chat");
     const input = chat.getByRole("textbox");
     assert.equal(await chat.getByRole("button", { name: "Send message", exact: true }).isDisabled(), true);
+    const newChat = chat.getByRole("button", { name: "New chat", exact: true });
+    assert.equal(await newChat.isVisible(), true);
+    assert.equal(await newChat.isEnabled(), true);
+    const buttonBounds = await newChat.boundingBox();
+    const chatBounds = await chat.boundingBox();
+    assert.ok(buttonBounds.width >= chatBounds.width - 32);
+    assert.ok(buttonBounds.height >= 40);
+    await input.fill("Discard this draft");
+    await click(newChat);
+    assert.equal(await input.inputValue(), "");
+    assert.equal(await input.evaluate((element) => element === document.activeElement), true);
     await click(chat.getByRole("button", { name: suggestionsForTest }));
     await chat.getByRole("status", { name: "Atelier is typing" }).waitFor();
+    assert.equal(await newChat.isDisabled(), true);
     assert.equal(await input.inputValue(), "");
     assert.equal(await input.evaluate((element) => element === document.activeElement), true);
     assert.equal(await chat.getByRole("heading", { name: "What are we making?" }).count(), 0);
@@ -551,12 +869,29 @@ test("Chat sends suggestions, streams Markdown, applies files and supports editi
     await page.waitForFunction(() => window.chatRequests.length === 5);
     await page.evaluate(() => window.chatRequests.at(-1).end());
     await chat.getByRole("alert").filter({ hasText: "connection ended" }).waitFor();
-    page.once("dialog", (dialog) => dialog.dismiss());
+    const dialogs = [];
+    page.on("dialog", async (dialog) => {
+      dialogs.push(dialog.message());
+      await dialog.dismiss();
+    });
+    await input.fill("Unsent draft");
     await click(chat.getByRole("button", { name: "New chat", exact: true }));
-    assert.equal(await chat.getByRole("article", { name: "Your message" }).count(), 2);
-    page.once("dialog", (dialog) => dialog.accept());
-    await click(chat.getByRole("button", { name: "New chat", exact: true }));
-    await chat.getByRole("heading", { name: "What are we making?" }).waitFor();
+    await chat.getByRole("heading", { name: "Make it your own" }).waitFor();
+    assert.deepEqual(dialogs, []);
+    assert.equal(await input.inputValue(), "");
+    assert.equal(await input.evaluate((element) => element === document.activeElement), true);
+    assert.equal(await chat.getByRole("article").count(), 0);
+    assert.deepEqual(await page.evaluate(() =>
+      JSON.parse(localStorage.getItem("atelier-studio-project-v1:local:current")).files), updated);
+    await page.reload();
+    await chat.getByRole("heading", { name: "Make it your own" }).waitFor();
+    assert.equal(await chat.getByRole("article").count(), 0);
+    await input.fill("A fresh conversation");
+    await input.press("Enter");
+    await page.waitForFunction(() => window.chatRequests.length === 1);
+    assert.deepEqual(await page.evaluate(() => window.chatRequests[0].body.conversation), []);
+    assert.deepEqual(await page.evaluate(() => window.chatRequests[0].body.currentFiles), updated);
+    await click(chat.getByRole("button", { name: "Stop response" }));
   } finally { await context.close(); }
 });
 
@@ -576,6 +911,7 @@ test("Chat keeps 100 messages per project, preserves manual scrolling and restor
     const chat = page.locator("#workspace-chat");
     const log = chat.getByRole("log");
     const input = chat.getByRole("textbox");
+    await log.getByRole("article").last().waitFor();
     assert.equal(await log.getByRole("article").count(), 100);
     assert.equal(await log.getAttribute("aria-live"), "polite");
     await input.fill("Continue");
@@ -593,6 +929,7 @@ test("Chat keeps 100 messages per project, preserves manual scrolling and restor
     await chatEvent(page, { type: "done", project: null });
     await page.waitForFunction(() => JSON.parse(localStorage.getItem("atelier-chat-v1:local:current")).at(-1).status === "complete");
     await page.reload();
+    await log.getByRole("article").last().waitFor();
     assert.equal(await log.getByRole("article").count(), 100);
     await chat.getByText("Continue", { exact: true }).waitFor();
     await click(page.getByRole("button", { name: "New project" }));
@@ -601,7 +938,7 @@ test("Chat keeps 100 messages per project, preserves manual scrolling and restor
     await input.press("Enter");
     await page.waitForFunction(() => window.chatRequests.length === 1);
     await click(page.getByRole("button", { name: "Projects", exact: true }));
-    await click(page.getByRole("button", { name: /Kebabhouse Karlskrona.*files/ }));
+    await click(page.getByRole("button", { name: /Untitled project.*files/ }).last());
     await chat.getByText("Continue", { exact: true }).waitFor();
     assert.equal(await page.evaluate(() => window.chatRequests[0].aborted), true);
     assert.equal(await chat.getByText("Separate project", { exact: true }).count(), 0);
@@ -712,7 +1049,7 @@ test("Tablet and mobile use focus-trapped overlay drawers without squeezing the 
       await page.mouse.click(width - 8, 200);
       assert.equal(await page.getByRole("dialog", { name: "Build with Atelier" }).isVisible(), false);
       for (const device of ["desktop", "tablet", "mobile"]) {
-        await click(page.getByRole("button", { name: device, exact: true }));
+        await selectDevice(page, device);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
       }
     }
@@ -799,7 +1136,7 @@ test("switching projects during migration cannot overwrite the selected project"
     await click(page.getByRole("button", { name: "New project" }));
     await page.getByTitle("Rename project").filter({ hasText: "Untitled project" }).waitFor();
     release();
-    await page.frameLocator('iframe[title="Website preview"]').getByRole("heading", { name: /STOR SMAK/ }).waitFor();
+    await page.frameLocator('iframe[title="Website preview"]').getByRole("heading", { name: /Your new website/ }).waitFor();
     const saved = await page.evaluate(() => Object.entries(localStorage)
       .filter(([key]) => key.startsWith("atelier-studio-project-v1:local:"))
       .map(([, value]) => JSON.parse(value)));

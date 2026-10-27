@@ -3,16 +3,16 @@
 @tailwind utilities;
 
 :root {
-  --background: 50 23% 94%;
-  --foreground: 140 10% 18%;
-  --surface: 48 25% 98%;
-  --muted: 48 12% 90%;
-  --muted-foreground: 140 5% 43%;
-  --border: 45 12% 83%;
-  --accent: 139 16% 36%;
-  --accent-foreground: 48 25% 98%;
+  --background: 140 8% 8%;
+  --foreground: 48 15% 94%;
+  --surface: 140 7% 11%;
+  --muted: 140 6% 16%;
+  --muted-foreground: 140 5% 65%;
+  --border: 140 6% 24%;
+  --accent: 139 18% 68%;
+  --accent-foreground: 140 8% 8%;
   font-family: "DM Sans", sans-serif;
-  color-scheme: light;
+  color-scheme: dark;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -33,6 +33,8 @@ body,
 
 body {
   min-height: 100dvh;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
 }
 
 button,
@@ -146,6 +148,14 @@ dialog[open] {
   outline-offset: 2px;
 }
 
+.builder-layout[data-welcome="true"] {
+  grid-template-columns: 240px minmax(0, 1fr);
+}
+
+.builder-layout[data-welcome="true"][data-sidebar-collapsed="true"] {
+  grid-template-columns: 56px minmax(0, 1fr);
+}
+
 @media (max-width: 1279px) {
   .builder-layout {
     display: block;
@@ -185,7 +195,7 @@ dialog[open] {
   }
 
   .builder-panel::backdrop {
-    background: hsl(var(--foreground) / 0.35);
+    background: hsl(var(--background) / 0.65);
   }
 }
 
@@ -256,16 +266,44 @@ dialog[open] {
 .chat-markdown table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
 .chat-markdown td, .chat-markdown th { border: 1px solid hsl(var(--border)); padding: 4px 8px; }
 
+.chat-send-button.is-loading {
+  animation: chat-send-pulse 1.2s ease-in-out infinite;
+}
+
+.chat-typing-indicator {
+  /* Hide all dots together while their staggered animations reset. */
+  animation: chat-typing-reset 1.6s steps(1, end) infinite;
+}
+
 .chat-typing-dot {
   width: 5px;
   height: 5px;
   border-radius: 50%;
   background: hsl(var(--accent));
-  animation: pulse 1s ease-in-out infinite;
+  opacity: 0;
+  animation: dot-appear 1.6s linear infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .chat-send-button.is-loading,
+  .chat-typing-indicator,
   .chat-typing-dot { animation: none; }
+  .chat-typing-dot { opacity: 1; }
+}
+
+@keyframes chat-send-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.12); }
+}
+
+@keyframes chat-typing-reset {
+  0% { opacity: 1; }
+  62.5%, 100% { opacity: 0; }
+}
+
+@keyframes dot-appear {
+  0%, 62.51%, 100% { opacity: 0; }
+  6.25%, 62.5% { opacity: 1; }
 }
 
 @keyframes pulse {

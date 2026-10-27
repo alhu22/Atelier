@@ -58,7 +58,7 @@ export function Dashboard() {
               Account details, saved project metadata, and recent usage. Project contents are not shown.
             </p>
           </div>
-          <Button disabled={auth.loading || !auth.user || admin.loading} onClick={() => void admin.refresh()} variant="primary">
+          <Button disabled={auth.loading || !auth.user || admin.loading || Boolean(admin.deletingProject)} onClick={() => void admin.refresh()} variant="primary">
             {admin.loading ? "Refreshing…" : "Refresh data"}
           </Button>
         </div>
@@ -147,6 +147,9 @@ export function Dashboard() {
                 activity={admin.selectedActivity}
                 profile={admin.selectedProfile}
                 projects={admin.selectedProjects}
+                deletingProject={admin.deletingProject}
+                deleteDisabled={admin.loading || Boolean(admin.deletingProject)}
+                onDeleteProject={(project) => void admin.deleteProject(project)}
               />
             ) : (
               <p className="p-5 text-sm text-muted-foreground">
@@ -173,10 +176,16 @@ function AccountDetails({
   profile,
   projects,
   activity,
+  deletingProject,
+  deleteDisabled,
+  onDeleteProject,
 }: {
   profile: UserProfile;
   projects: AdminProject[];
   activity: ActivityEvent[];
+  deletingProject: AdminProject | null;
+  deleteDisabled: boolean;
+  onDeleteProject: (project: AdminProject) => void;
 }) {
   return (
     <div className="space-y-6 p-4 md:p-5">
@@ -202,9 +211,20 @@ function AccountDetails({
                     {project.entrypoint}
                   </span>
                 </span>
-                <time className="shrink-0 text-xs text-muted-foreground">
-                  {formatDate(project.updatedAt)}
-                </time>
+                <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                  <time className="text-xs text-muted-foreground">
+                    {formatDate(project.updatedAt)}
+                  </time>
+                  <Button
+                    aria-label={`Delete ${project.name}`}
+                    disabled={deleteDisabled}
+                    onClick={() => onDeleteProject(project)}
+                    size="sm"
+                    variant="danger"
+                  >
+                    {deletingProject?.owner === project.owner && deletingProject.id === project.id ? "Deleting…" : "Delete"}
+                  </Button>
+                </div>
               </li>
             ))}
           </ul>

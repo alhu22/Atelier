@@ -4,11 +4,22 @@ import { ChatMarkdown, CopyButton } from "@/components/ChatMarkdown";
 import { useConversation } from "@/hooks/useConversation";
 import type { ChatOptions } from "@/integrations/studioApi";
 
-const suggestions = [
+export const suggestions = [
   "A warm, editorial site for a neighborhood bakery",
   "A quiet, gallery-like portfolio for a ceramic artist",
   "A launch page for a tiny cabin in the woods",
 ];
+
+export interface PreviewConversation {
+  storageKey: string;
+  prompt: string;
+  busy: boolean;
+  responseLength: number;
+  settled: boolean;
+  failed: boolean;
+  retry: () => void;
+  retryDisabled: boolean;
+}
 
 interface AssistantPanelProps {
   collapsed: boolean;
@@ -20,12 +31,14 @@ interface AssistantPanelProps {
   onGenerate: (prompt: string, options: ChatOptions) => Promise<string[]>;
   onOpenFile: (path: string) => void;
   files: Record<string, string>;
+  existingProjectName?: string;
+  onPreviewConversation?: (state: PreviewConversation) => void;
 }
 
 export function AssistantPanel({
-  collapsed, visible, onToggle, storageKey, blocked, modelStatus, onGenerate, onOpenFile, files,
+  collapsed, visible, onToggle, storageKey, blocked, modelStatus, onGenerate, onOpenFile, files, existingProjectName, onPreviewConversation,
 }: AssistantPanelProps) {
-  const chat = useConversation(storageKey, onGenerate);
+  const chat = useConversation(storageKey, onGenerate, !blocked);
   const [prompt, setPrompt] = useState("");
   const [editId, setEditId] = useState<string>();
   const [away, setAway] = useState(false);
@@ -33,6 +46,25 @@ export function AssistantPanel({
   const log = useRef<HTMLDivElement>(null);
   const following = useRef(true);
   const lastUser = chat.messages.filter((message) => message.role === "user").at(-1)?.id;
+
+  useLayoutEffect(() => {
+    const user = chat.messages.filter((message) => message.role === "user").at(-1);
+    const reply = chat.messages.at(-1);
+    const assistant = reply?.role === "assistant" ? reply : undefined;
+    onPreviewConversation?.({
+      storageKey,
+      prompt: user?.content ?? "",
+      busy: chat.busy,
+      responseLength: assistant?.content.length ?? 0,
+      settled: !!assistant && assistant.status !== "streaming",
+      failed: assistant?.status === "error" || assistant?.status === "stopped",
+      retry: () => {
+        if (assistant) chat.regenerate(assistant.id);
+        else if (user) chat.send(user.content, user.id);
+      },
+      retryDisabled: chat.busy || blocked,
+    });
+  }, [chat.messages, chat.busy, blocked, storageKey, onPreviewConversation]);
 
   function jumpToLatest() {
     following.current = true;
@@ -77,29 +109,14 @@ export function AssistantPanel({
   return (
     <aside aria-label="Build with Atelier" className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden border-r border-border bg-surface">
       <div className={`flex shrink-0 items-center border-b border-border py-4 ${collapsed ? "justify-center" : "justify-between gap-1 px-3"}`}>
-        {!collapsed && <>
+        {!collapsed &&
           <div className="min-w-0">
             <h2 className="font-display text-sm font-semibold">
-              <span aria-hidden="true" className="mr-2 text-[#a34b36]">✳</span>Build with Atelier
+              <span aria-hidden="true" className="mr-2 text-accent">✳</span>Build with Atelier
             </h2>
             <p className="mt-1 truncate text-[10px] text-muted-foreground">{modelStatus}</p>
           </div>
-          <button
-            aria-label="New chat"
-            className="chat-action shrink-0"
-            disabled={chat.busy || !chat.messages.length}
-            onClick={() => {
-              if (window.confirm("Clear this project's conversation and start a new chat? Project files will not change.")) {
-                chat.clear();
-                setEditId(undefined);
-                setPrompt("");
-                jumpToLatest();
-                textarea.current?.focus();
-              }
-            }}
-            type="button"
-          >New chat</button>
-        </>}
+        }
         <button aria-controls="chat-content" aria-expanded={!collapsed} aria-label="Toggle chat" className="panel-toggle" onClick={onToggle} title="Toggle chat" type="button">
           <svg aria-hidden="true" width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5">
             {collapsed ? <path d="M3 3h14v10H8l-5 4Zm3 4h8M6 10h5" /> : <path d="m12 4-6 6 6 6" />}
@@ -107,6 +124,25 @@ export function AssistantPanel({
         </button>
       </div>
       <div className={collapsed ? "hidden" : "flex min-h-0 flex-1 flex-col"} id="chat-content">
+        <div className="shrink-0 border-b border-border p-3">
+          <Button
+            className="w-full"
+            disabled={chat.busy}
+            onClick={() => {
+              chat.clear();
+              setEditId(undefined);
+              setPrompt("");
+              jumpToLatest();
+              textarea.current?.focus();
+            }}
+            title="Clear this conversation and start fresh. Project files are kept."
+          >
+            <svg aria-hidden="true" width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M10 4v12M4 10h12" />
+            </svg>
+            New chat
+          </Button>
+        </div>
         <div className="relative flex min-h-0 flex-1 flex-col">
           <div
             aria-label="Conversation"
@@ -126,6 +162,12 @@ export function AssistantPanel({
           >
             {chat.messages.length === 0 ? (
               <div className="py-6">
+                {existingProjectName ? <>
+                  <h1 className="font-display text-2xl font-semibold">Make it your own</h1>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                    {existingProjectName} is ready to customize. Tell me what you’d like to change — the design, content, or features.
+                  </p>
+                </> : <>
                 <h1 className="font-display text-2xl font-semibold">What are we making?</h1>
                 <p className="mt-2 text-sm leading-6 text-muted-foreground">Start with a feeling, a business, or a half-formed idea. We’ll make it real.</p>
                 <div className="mt-6 space-y-2">
@@ -135,20 +177,21 @@ export function AssistantPanel({
                     </button>
                   ))}
                 </div>
+                </>}
               </div>
             ) : chat.messages.map((message) => (
               <article aria-label={message.role === "user" ? "Your message" : "Atelier reply"} className={`chat-message group min-w-0 max-w-[94%] ${message.role === "user" ? "ml-auto" : "mr-auto"}`} key={message.id}>
                 <div className={`min-w-0 break-words rounded-lg px-3 py-2.5 text-sm leading-6 ${message.role === "user" ? "whitespace-pre-wrap bg-foreground text-background" : "border border-border bg-background text-foreground"}`}>
-                  {message.role === "assistant" && <span aria-label="Atelier" className="mb-1 block text-[#a34b36]">✳</span>}
+                  {message.role === "assistant" && <span aria-label="Atelier" className="mb-1 block text-accent">✳</span>}
                   {message.role === "user" ? message.content : <ChatMarkdown content={message.content} />}
                   {message.status === "streaming" && (
-                    <div aria-label={message.content ? "Generating response" : "Atelier is typing"} className="flex items-center gap-1 py-2 text-xs text-muted-foreground" role="status">
+                    <div aria-label={message.content ? "Generating response" : "Atelier is typing"} className="chat-typing-indicator flex items-center gap-1 py-2 text-xs text-muted-foreground" role="status">
                       <span className="sr-only">{message.content ? "Generating response" : "Atelier is typing"}</span>
-                      {[0, 1, 2].map((dot) => <span aria-hidden="true" className="chat-typing-dot" key={dot} style={{ animationDelay: `${dot * 150}ms` }} />)}
+                      {[0, 1, 2].map((dot) => <span aria-hidden="true" className="chat-typing-dot" key={dot} style={{ animationDelay: `${dot * 250}ms` }} />)}
                     </div>
                   )}
                   {message.status === "stopped" && <p className="text-xs text-muted-foreground">Response stopped. No pending changes were applied.</p>}
-                  {message.error && <div className="mt-2 text-xs text-[#a34b36]" role="alert">
+                  {message.error && <div className="mt-2 text-xs text-red-300" role="alert">
                     <p>{message.error}</p>
                     <button aria-label="Retry response" className="chat-action mt-1" disabled={chat.busy || blocked} onClick={() => chat.regenerate(message.id)} type="button">Retry</button>
                   </div>}
@@ -190,7 +233,7 @@ export function AssistantPanel({
           {away && <button aria-label="Jump to latest message" className="absolute bottom-2 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full border border-border bg-surface px-3 py-2 text-xs shadow-sm hover:bg-muted" onClick={jumpToLatest} type="button">Jump to latest ↓</button>}
         </div>
         <form className="shrink-0 border-t border-border p-3" onSubmit={submit}>
-          {chat.storageError && <p className="mb-2 text-xs text-[#a34b36]" role="alert">{chat.storageError}</p>}
+          {chat.storageError && <p className="mb-2 text-xs text-red-300" role="alert">{chat.storageError}</p>}
           {editId && <div className="mb-2 flex items-center justify-between text-xs text-muted-foreground">
             <span>Editing your last message</span>
             <button aria-label="Cancel editing" className="chat-action" onClick={() => { setEditId(undefined); setPrompt(""); }} type="button">Cancel</button>
@@ -214,7 +257,7 @@ export function AssistantPanel({
           <div className="mt-2 flex items-center justify-between gap-2">
             <span className="font-mono text-[9px] tracking-[.12em] text-muted-foreground">AZURE OPENAI · WEBSITE BUILDER</span>
             {chat.busy ? (
-              <Button aria-label="Stop response" className="bg-[#a34b36] text-white hover:bg-[#893e2c]" onClick={chat.stop}>■</Button>
+              <Button aria-label="Stop response" className="chat-send-button is-loading bg-[#a34b36] text-white hover:bg-[#893e2c]" onClick={chat.stop}>■</Button>
             ) : (
               <Button aria-label={editId ? "Resend message" : "Send message"} disabled={blocked || !prompt.trim()} type="submit" variant="primary">↑</Button>
             )}

@@ -5,9 +5,9 @@ interface StatusMessageProps {
 }
 
 const toneClasses = {
-  error: "border-red-300 bg-red-50 text-red-900",
+  error: "border-red-400/30 bg-red-400/10 text-red-300",
   info: "border-border bg-muted text-foreground",
-  success: "border-emerald-300 bg-emerald-50 text-emerald-900",
+  success: "border-emerald-400/30 bg-emerald-400/10 text-emerald-300",
 };
 
 export function StatusMessage({

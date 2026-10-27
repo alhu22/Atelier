@@ -3,6 +3,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { Auth } from "@/pages/Auth";
 import { Dashboard } from "@/pages/Dashboard";
 import { Index } from "@/pages/Index";
+import { Profile } from "@/pages/Profile";
 
 export function App() {
   return (
@@ -10,6 +11,7 @@ export function App() {
       <Route path="/main" element={<MainRoute />} />
       <Route path="/admin" element={<WorkspaceRoute admin />} />
       <Route path="/:userId" element={<WorkspaceRoute />} />
+      <Route path="/:userId/projects/:projectId" element={<WorkspaceRoute />} />
       <Route path="*" element={<RedirectTo pathname="/main" />} />
     </Routes>
   );
@@ -27,19 +29,23 @@ function CheckingAccount() {
 function MainRoute() {
   const account = useAuth();
   if (account.loading) return <CheckingAccount />;
-  if (!account.user || !account.role) return <Auth />;
+  if (!account.user) return <Index welcome />;
+  if (!account.role) return <Auth />;
   return <RedirectTo pathname={account.role === "admin" ? "/admin" : `/${encodeURIComponent(account.user.uid)}`} />;
 }
 
 function WorkspaceRoute({ admin = false }: { admin?: boolean }) {
   const account = useAuth();
-  const { userId } = useParams();
+  const { userId, projectId } = useParams();
   if (account.loading) return <CheckingAccount />;
   if (!account.user || !account.role) return <RedirectTo pathname="/main" />;
+  if (!admin && !projectId && userId === `${account.user.uid}profile`) {
+    return <Profile key={account.user.uid} />;
+  }
   if (account.role === "admin") {
     if (admin) return <Dashboard />;
-    return userId === account.user.uid ? <Index /> : <RedirectTo pathname="/admin" />;
+    return userId === account.user.uid ? <Index welcome={!projectId} /> : <RedirectTo pathname="/admin" />;
   }
   const workspace = `/${encodeURIComponent(account.user.uid)}`;
-  return !admin && userId === account.user.uid ? <Index /> : <RedirectTo pathname={workspace} />;
+  return !admin && userId === account.user.uid ? <Index welcome={!projectId} /> : <RedirectTo pathname={workspace} />;
 }

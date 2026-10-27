@@ -3,6 +3,8 @@ import type { User } from "firebase/auth";
 import {
   collection,
   collectionGroup,
+  deleteDoc,
+  doc,
   getDocs,
   limit,
   orderBy,
@@ -10,6 +12,7 @@ import {
   type Timestamp,
 } from "firebase/firestore";
 import { firestore } from "@/integrations/firebase/client";
+import { withFirestoreContext } from "@/integrations/firebase/errors";
 import type { ActivityEvent, AdminProject, UserProfile } from "@/types";
 
 interface AdminData {
@@ -34,12 +37,15 @@ export function useAdminDashboard(user: User | null) {
   });
   const [selectedUid, setSelectedUid] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [deletingProject, setDeletingProject] = useState<AdminProject | null>(null);
+  const deletionPending = useRef(false);
   const loadedUid = useRef<string | null>(null);
   const requestVersion = useRef(0);
   const currentUid = useRef(user?.uid);
   currentUid.current = user?.uid;
 
   const refresh = useCallback(async () => {
+    if (deletionPending.current && loadedUid.current === user?.uid) return;
     const version = ++requestVersion.current;
     const active = () => version === requestVersion.current && currentUid.current === user?.uid;
     if (!user || !firestore) {
@@ -198,6 +204,35 @@ export function useAdminDashboard(user: User | null) {
     }
   }, [user]);
 
+  const deleteProject = useCallback(async (project: AdminProject) => {
+    if (!user || !firestore || !data.isAdmin || data.loading || deletionPending.current) return;
+    const version = requestVersion.current;
+    const active = () => version === requestVersion.current && currentUid.current === user.uid;
+    deletionPending.current = true;
+    setDeletingProject(project);
+    setData((current) => ({ ...current, error: null }));
+    try {
+      const reference = doc(firestore, "users", project.owner, "projects", project.id);
+      await withFirestoreContext("delete project", reference.path, () => deleteDoc(reference));
+      if (!active()) return;
+      setData((current) => ({
+        ...current,
+        projects: current.projects.filter(
+          (item) => item.owner !== project.owner || item.id !== project.id,
+        ),
+      }));
+    } catch (error) {
+      if (!active()) return;
+      setData((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : "Could not delete the project.",
+      }));
+    } finally {
+      deletionPending.current = false;
+      setDeletingProject(null);
+    }
+  }, [user, data.isAdmin, data.loading]);
+
   useEffect(() => {
     void refresh();
     return () => { requestVersion.current += 1; };
@@ -241,6 +276,8 @@ export function useAdminDashboard(user: User | null) {
     selectedActivity,
     filteredProfiles,
     refresh,
+    deleteProject,
+    deletingProject,
   };
 }
 

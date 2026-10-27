@@ -104,8 +104,10 @@ export async function compileProject(files, checkTypes = false) {
         builder.onResolve({ filter: /.*/ }, (args) =>
           args.kind === "entry-point" ? { path: "src/main.tsx", namespace: "project" } : undefined);
         builder.onResolve({ filter: /.*/, namespace: "project" }, async (args) => {
-          if (/^(?:https?:|data:)/.test(args.path)) {
-            if (args.kind === "url-token") return { path: args.path, external: true };
+          if (/^(?:https?:|data:|\/\/)/i.test(args.path)) {
+            if (args.kind === "url-token" || args.kind === "import-rule") {
+              return { path: args.path, external: true };
+            }
             throw new Error("Remote code imports are not supported in local preview.");
           }
           if (/^(?:\.|\/|@\/)/.test(args.path)) {

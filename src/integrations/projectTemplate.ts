@@ -11,11 +11,11 @@ const sources = import.meta.glob<string>(
   { query: "?raw", import: "default", eager: true },
 );
 
-export function createProjectFiles(): ProjectFiles {
+export function createProjectFiles(projectName = "Untitled project"): ProjectFiles {
   return Object.fromEntries(
     Object.entries(sources).map(([path, source]) => [
       path.replace("../../templates/react/", ""),
-      source,
+      path.endsWith("/README.md") ? source.replaceAll("{{projectName}}", projectName) : source,
     ]),
   );
 }

@@ -64,7 +64,7 @@ def stream_chat(prompt, conversation, files, entrypoint, cancelled):
     conversation = validate_conversation(conversation)
     try:
         context_limit = int(setting("MODEL_CONTEXT_TOKENS") or "128000")
-        output_limit = int(setting("MODEL_MAX_COMPLETION_TOKENS") or "16000")
+        output_limit = int(setting("MODEL_MAX_COMPLETION_TOKENS") or "32000")
         if output_limit < 1 or context_limit <= output_limit + 4096:
             raise ValueError()
     except ValueError:
@@ -80,7 +80,9 @@ def stream_chat(prompt, conversation, files, entrypoint, cancelled):
         + convention
         + "\nFor this chat, the tool protocol overrides any JSON-only output instruction above: "
         "write normal Markdown in content, and send project JSON ONLY through apply_project. "
-        "Unspecified files are preserved. Use deletedFiles for explicit deletions. Do not modify files whose contents were omitted."
+        "Unspecified files are preserved. Use deletedFiles for explicit deletions. Do not modify files whose contents were omitted. "
+        "Include a short, descriptive project name based on the website's purpose or brand, not the latest edit. "
+        "Do not use generic names such as Untitled project."
     )
     # UTF-8 byte counts conservatively bound text tokens; reserve room for tools and completion.
     messages, omitted = context_messages(system, prompt, conversation, files, entrypoint, context_limit - output_limit - 4096)
@@ -97,11 +99,12 @@ def stream_chat(prompt, conversation, files, entrypoint, cancelled):
                 "parameters": {
                     "type": "object",
                     "properties": {
+                        "name": {"type": "string", "minLength": 1, "maxLength": 120},
                         "entrypoint": {"type": "string"},
                         "files": {"type": "object", "additionalProperties": {"type": "string"}},
                         "deletedFiles": {"type": "array", "items": {"type": "string"}},
                     },
-                    "required": ["entrypoint", "files"],
+                    "required": ["name", "entrypoint", "files"],
                     "additionalProperties": False,
                 },
             },
@@ -170,7 +173,7 @@ def stream_chat(prompt, conversation, files, entrypoint, cancelled):
                     break
                 chunk = json.loads(data)
                 if "error" in chunk or chunk.get("type") in ("error", "response.failed", "response.incomplete"):
-                    raise model_error(400, json.dumps(chunk), settings["API_KEY"], settings["MODEL_URL"], settings["MODEL_NAME"])
+                    raise model_error(None, json.dumps(chunk), settings["API_KEY"], settings["MODEL_URL"], settings["MODEL_NAME"])
                 if api == "responses":
                     event_type = chunk.get("type")
                     delta = {}
@@ -232,6 +235,9 @@ def stream_chat(prompt, conversation, files, entrypoint, cancelled):
             raise RuntimeError("The model returned an unsupported tool.")
         try:
             project = json.loads(arguments)
+            project_name = project.get("name")
+            if project_name is not None and (not isinstance(project_name, str) or not project_name.strip() or len(project_name.strip()) > 120):
+                raise ValueError()
             changes = project["files"]
             deleted = project.get("deletedFiles", [])
             if not isinstance(changes, dict) or not isinstance(deleted, list) or any(not isinstance(name, str) for name in deleted):
@@ -250,5 +256,7 @@ def stream_chat(prompt, conversation, files, entrypoint, cancelled):
             validate_react_project(next_files, next_entrypoint)
             compile_project(next_files, check_types=True)
         result = {"files": next_files, "entrypoint": next_entrypoint}
+        if project_name is not None:
+            result["name"] = project_name.strip()
     if not cancelled.is_set():
         yield {"type": "done", "project": result}

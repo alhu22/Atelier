@@ -6,6 +6,30 @@ service cloud.firestore {
       return request.auth != null && request.auth.token.admin == true;
     }
 
+    match /templates/{templateId} {
+      allow get, list: if request.auth != null;
+      allow create, update: if isAdmin()
+        && request.resource.data.keys().hasAll(['name', 'description', 'order', 'files', 'entrypoint', 'updatedAt'])
+        && request.resource.data.keys().hasOnly(['name', 'description', 'order', 'files', 'entrypoint', 'updatedAt', 'previewImage'])
+        && (!request.resource.data.keys().hasAny(['previewImage'])
+          || (request.resource.data.previewImage is string
+            && request.resource.data.previewImage.size() <= 262144
+            && request.resource.data.previewImage.matches('data:image/jpeg;base64,[A-Za-z0-9+/=]+')))
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 120
+        && request.resource.data.description is string
+        && request.resource.data.description.size() <= 500
+        && request.resource.data.order is int
+        && request.resource.data.files is map
+        && request.resource.data.files.size() > 0
+        && request.resource.data.files.size() <= 100
+        && request.resource.data.entrypoint is string
+        && request.resource.data.files[request.resource.data.entrypoint] is string
+        && request.resource.data.updatedAt is timestamp;
+      allow delete: if isAdmin();
+    }
+
     match /users/{userId}/projects/{projectId} {
       function validProject() {
         return request.resource.data.keys().hasAll([
@@ -46,7 +70,8 @@ service cloud.firestore {
           || request.resource.data.createdAt == resource.data.createdAt
         )
         && validProject();
-      allow delete: if request.auth != null && request.auth.uid == userId;
+      allow delete: if isAdmin()
+        || (request.auth != null && request.auth.uid == userId);
     }
 
     match /{path=**}/projects/{projectId} {
@@ -54,6 +79,13 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
+      function validProfilePhoto() {
+        return request.resource.data.photoURL is string
+          && (request.resource.data.photoURL.size() <= 2048
+            || (request.resource.data.photoURL.size() <= 102400
+              && request.resource.data.photoURL.matches('data:image/jpeg;base64,[A-Za-z0-9+/=]+')));
+      }
+
       allow get: if isAdmin() || (request.auth != null && request.auth.uid == userId);
       allow list: if isAdmin();
       allow create: if request.auth != null
@@ -67,8 +99,7 @@ service cloud.firestore {
         && request.resource.data.email == request.auth.token.email
         && request.resource.data.displayName is string
         && request.resource.data.displayName.size() <= 120
-        && request.resource.data.photoURL is string
-        && request.resource.data.photoURL.size() <= 2048
+        && validProfilePhoto()
         && request.resource.data.createdAt == request.time
         && request.resource.data.lastSeenAt == request.time;
       allow update: if request.auth != null
@@ -82,8 +113,7 @@ service cloud.firestore {
         && request.resource.data.email == request.auth.token.email
         && request.resource.data.displayName is string
         && request.resource.data.displayName.size() <= 120
-        && request.resource.data.photoURL is string
-        && request.resource.data.photoURL.size() <= 2048
+        && validProfilePhoto()
         && request.resource.data.createdAt == resource.data.createdAt
         && request.resource.data.lastSeenAt == request.time;
     }

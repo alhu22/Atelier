@@ -10,6 +10,8 @@ export interface StudioProject {
   id: string;
   name: string;
   owner?: string;
+  // Local-only marker: only unsynced drafts may create a missing cloud document.
+  pendingCreation?: boolean;
   files: ProjectFiles;
   entrypoint: string;
   generated: boolean;

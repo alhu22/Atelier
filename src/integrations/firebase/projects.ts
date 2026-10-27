@@ -2,12 +2,12 @@ import {
   collection,
   deleteDoc,
   doc,
-  getDocs,
-  limit,
-  query,
+  getDocsFromServer,
+  onSnapshot,
   runTransaction,
   serverTimestamp,
   type Firestore,
+  type QueryDocumentSnapshot,
 } from "firebase/firestore";
 import type { User } from "firebase/auth";
 import type { ProjectFiles, ProjectSettings, StudioProject } from "@/types";
@@ -21,14 +21,37 @@ export async function listProjects(
   if (!user) return [];
   const snapshot = await withFirestoreContext(
     "list projects", `users/${user.uid}/projects`,
-    () => getDocs(query(collection(database, "users", user.uid, "projects"), limit(100))),
+    () => getDocsFromServer(collection(database, "users", user.uid, "projects")),
   );
-  return snapshot.docs.map((projectDoc) => {
+  return projectRecords(snapshot.docs, user.uid);
+}
+
+export function observeProjects(
+  database: Firestore,
+  user: User,
+  onProjects: (projects: StudioProject[]) => void,
+  onError: (error: Error) => void,
+): () => void {
+  return onSnapshot(
+    collection(database, "users", user.uid, "projects"),
+    { includeMetadataChanges: true },
+    (snapshot) => {
+      if (!snapshot.metadata.fromCache && !snapshot.metadata.hasPendingWrites) {
+        onProjects(projectRecords(snapshot.docs, user.uid));
+      }
+    },
+    onError,
+  );
+}
+
+function projectRecords(docs: QueryDocumentSnapshot[], owner: string): StudioProject[] {
+  return docs.map((projectDoc) => {
     const value = projectDoc.data();
     return {
       id: projectDoc.id,
       name: typeof value.name === "string" ? value.name : "Untitled project",
-      owner: typeof value.owner === "string" ? value.owner : user.uid,
+      owner,
+      pendingCreation: false,
       files: isProjectFiles(value.files)
         ? value.files
         : typeof value.html === "string"
@@ -52,6 +75,9 @@ export async function saveProject(
   const projectRef = doc(database, "users", user.uid, "projects", project.id);
   await withFirestoreContext("save project (read/write)", projectRef.path, () => runTransaction(database, async (transaction) => {
     const existing = await transaction.get(projectRef);
+    if (!existing.exists() && !project.pendingCreation) {
+      throw new Error("This project was deleted from your account. It cannot be saved again.");
+    }
     // Keep Firestore timestamp precision; rules require createdAt to stay unchanged.
     const createdAt = existing.data()?.createdAt ?? project.createdAt;
     transaction.set(projectRef, {

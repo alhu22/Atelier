@@ -1,13 +1,19 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Textarea } from "@/components/ui/Input";
 import type { ProjectFiles } from "@/types";
 import { useProjectPreview } from "@/hooks/useProjectPreview";
 import { StatusMessage } from "@/components/ui/StatusMessage";
 import { FileTree } from "@/components/FileTree";
+import { BuildingPreview } from "@/components/BuildingPreview";
+import type { PreviewConversation } from "@/components/AssistantPanel";
 
 interface PreviewPanelProps {
-  codeRequest?: { path: string };
+  conversation?: PreviewConversation;
+  generated?: boolean;
+  mode: CanvasMode;
+  device: DeviceSize;
+  onModeChange: (mode: CanvasMode) => void;
   files: ProjectFiles;
   entrypoint: string;
   activeFile: string;
@@ -18,11 +24,15 @@ interface PreviewPanelProps {
   onAddFile: () => void;
 }
 
-type CanvasMode = "preview" | "code";
-type DeviceSize = "desktop" | "tablet" | "mobile";
+export type CanvasMode = "preview" | "code";
+export type DeviceSize = "desktop" | "tablet" | "mobile";
 
 export function PreviewPanel({
-  codeRequest,
+  conversation,
+  generated = false,
+  mode,
+  device,
+  onModeChange,
   files,
   entrypoint,
   activeFile,
@@ -32,11 +42,6 @@ export function PreviewPanel({
   onApply,
   onAddFile,
 }: PreviewPanelProps) {
-  const [mode, setMode] = useState<CanvasMode>("preview");
-  useEffect(() => {
-    if (codeRequest) setMode("code");
-  }, [codeRequest]);
-  const [device, setDevice] = useState<DeviceSize>("desktop");
   const [filesCollapsed, setFilesCollapsed] = useState(() => {
     try {
       return localStorage.getItem("atelier-files-collapsed") === "true";
@@ -46,11 +51,46 @@ export function PreviewPanel({
   });
   const [frameHeight, setFrameHeight] = useState(384);
   const frameRef = useRef<HTMLIFrameElement>(null);
-  const compiled = useProjectPreview(files, entrypoint);
+  const hasPrompt = !!conversation?.prompt;
+  const compiled = useProjectPreview(files, entrypoint, generated || !hasPrompt);
   const srcDoc = useMemo(
     () => withPreviewSizing(compiled.reactProject ? compiled.html : buildPreviewDocument(files, activeFile, content)),
     [activeFile, content, files, compiled.reactProject, compiled.html],
   );
+  const [lastLiveDocument, setLastLiveDocument] = useState("");
+  const startedWithoutVersion = useRef(!generated);
+  const nextLiveDocument = generated && compiled.ready ? srcDoc : "";
+  const liveDocument = nextLiveDocument || lastLiveDocument;
+  const building = hasPrompt && !liveDocument && (!generated || startedWithoutVersion.current);
+  const [buildingSeen, setBuildingSeen] = useState(false);
+  const [revealed, setRevealed] = useState(false);
+  const [transitionDone, setTransitionDone] = useState(false);
+  const buildFailed = !!conversation && (
+    conversation.failed ||
+    (conversation.settled && !conversation.busy && !generated) ||
+    (!!compiled.error && !conversation.busy)
+  );
+
+  useLayoutEffect(() => {
+    if (nextLiveDocument) setLastLiveDocument(nextLiveDocument);
+  }, [nextLiveDocument]);
+
+  useLayoutEffect(() => {
+    if (building) {
+      setBuildingSeen(true);
+      setRevealed(false);
+      setTransitionDone(false);
+    } else if (!hasPrompt && !liveDocument) {
+      setBuildingSeen(false);
+      setRevealed(false);
+    }
+  }, [building, hasPrompt, liveDocument]);
+
+  useEffect(() => {
+    if (!revealed || !buildingSeen) return;
+    const timer = window.setTimeout(() => setTransitionDone(true), 300);
+    return () => window.clearTimeout(timer);
+  }, [revealed, buildingSeen]);
 
   useEffect(() => {
     try {
@@ -91,42 +131,18 @@ export function PreviewPanel({
   }, [files, onSelectFile]);
 
   return (
-    <section className="flex min-h-[28rem] flex-1 flex-col overflow-hidden rounded-lg border border-border bg-surface">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2">
-        <div className="flex items-center gap-1 rounded-md bg-muted p-1">
-          {(["preview", "code"] as const).map((item) => (
-            <button
-              aria-pressed={mode === item}
-              className={`rounded px-3 py-1.5 text-xs capitalize ${mode === item ? "bg-surface font-semibold shadow-sm" : "text-muted-foreground"}`}
-              key={item}
-              onClick={() => setMode(item)}
-              type="button"
-            >
-              {item}
-            </button>
-          ))}
-        </div>
-        <div aria-label="Preview size" className="flex gap-1">
-          {(["desktop", "tablet", "mobile"] as const).map((item) => (
-            <button
-              aria-pressed={device === item}
-              className={`rounded px-2 py-1.5 text-xs capitalize ${device === item ? "bg-muted font-medium text-foreground" : "text-muted-foreground"}`}
-              key={item}
-              onClick={() => setDevice(item)}
-              type="button"
-            >
-              {item}
-            </button>
-          ))}
-        </div>
-      </div>
+    <section className="project-preview relative flex min-h-[28rem] flex-1 flex-col overflow-hidden bg-surface">
+      {mode === "preview" && (liveDocument || (generated && !startedWithoutVersion.current)) && (conversation?.busy || compiled.loading) && (
+        <span role="status" className="pointer-events-none absolute right-3 top-3 z-10 rounded-full border border-accent/25 bg-surface px-3 py-1 text-xs text-accent">Updating…</span>
+      )}
       <div
         className="grid min-h-0 flex-1 transition-[grid-template-columns] duration-200 ease-in-out motion-reduce:transition-none"
-        style={{ gridTemplateColumns: `${filesCollapsed ? "40px" : "min(14rem, 42%)"} minmax(0, 1fr)` }}
+        style={{ gridTemplateColumns: mode === "code" ? `${filesCollapsed ? "40px" : "min(14rem, 42%)"} minmax(0, 1fr)` : "minmax(0, 1fr)" }}
       >
         <aside
           aria-label="Project files"
           className="min-w-0 overflow-hidden border-r border-border bg-background/50"
+          hidden={mode !== "code"}
         >
           <div className={`flex items-center gap-1 py-3 text-xs font-semibold ${filesCollapsed ? "justify-center" : "px-2"}`}>
             {!filesCollapsed && <span className="mr-auto">Files</span>}
@@ -151,36 +167,44 @@ export function PreviewPanel({
           </div>
         </aside>
         <div className="flex min-w-0 flex-col bg-background">
-          <div className="border-b border-border px-4 py-2 font-mono text-[11px] text-muted-foreground">
-            {activeFile || entrypoint}
-          </div>
-          <div className="flex min-h-[24rem] min-w-0 flex-1 items-start justify-center bg-muted/50 p-3 md:p-5">
-            {mode === "preview" && compiled.loading ? (
+          {mode === "preview" && liveDocument && compiled.error && <StatusMessage message={compiled.error} tone="error" />}
+          <div className="preview-canvas bg-muted/50">
+            {mode === "preview" && !building && !liveDocument && compiled.loading ? (
               <p role="status" className="p-5 text-sm text-muted-foreground">Compiling React preview…</p>
-            ) : mode === "preview" && compiled.error ? (
+            ) : mode === "preview" && !building && !liveDocument && compiled.error ? (
               <StatusMessage message={compiled.error} tone="error" />
-            ) : mode === "preview" ? (
+            ) : mode === "preview" && !building ? (
               <iframe
                 ref={frameRef}
-                className={`min-h-[24rem] min-w-0 flex-1 border-0 bg-white shadow-sm transition-[max-width] ${deviceWidth[device]}`}
+                className={`preview-live border-0 bg-white shadow-sm ${deviceWidth[device]} ${buildingSeen ? `preview-reveal ${revealed ? "is-ready" : ""}` : ""}`}
                 sandbox="allow-scripts"
-                srcDoc={srcDoc}
+                srcDoc={liveDocument || srcDoc}
                 style={{ height: frameHeight }}
                 title="Website preview"
+                onLoad={() => { if (liveDocument) setRevealed(true); }}
               />
-            ) : (
+            ) : mode === "code" ? (
               <Textarea
                 aria-label="Selected project file source"
-                className="min-h-[24rem] flex-1 resize-none rounded-none border-0 bg-[#202321] p-5 font-mono text-xs leading-relaxed text-[#e9e9e5] focus:ring-0"
+                className="min-h-[24rem] flex-1 resize-none rounded-none border-0 bg-surface p-5 font-mono text-xs leading-relaxed text-foreground focus:ring-0"
                 onChange={(event) => onContentChange(event.target.value)}
                 spellCheck={false}
                 value={content}
               />
+            ) : null}
+            {mode === "preview" && conversation && (building || (buildingSeen && !transitionDone)) && (
+              <div
+                aria-hidden={revealed || undefined}
+                className={`preview-building-layer ${deviceWidth[device]} ${revealed ? "is-leaving" : ""}`}
+                inert={revealed}
+              >
+                <BuildingPreview conversation={conversation} assembling={generated && !conversation.busy} failed={buildFailed} />
+              </div>
             )}
           </div>
           {mode === "code" && (
             <div className="flex justify-end border-t border-border p-2">
-              <Button onClick={() => { onApply(); setMode("preview"); }} variant="primary">
+              <Button onClick={() => { onApply(); onModeChange("preview"); }} variant="primary">
                 Apply changes
               </Button>
             </div>

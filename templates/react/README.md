@@ -1,12 +1,8 @@
-# Kebabhouse Karlskrona
+# {{projectName}}
 
-A responsive restaurant starter built with React, strict TypeScript, Vite,
-and Tailwind. The food illustration is bundled in `public/assets/pizza.svg`.
-
-Before publishing, confirm the menu, prices, allergens, opening hours and contact
-details with the restaurant, and connect the actual online ordering URL. These
-details are deliberately not invented; the ordering section states it is not yet
-connected.
+A minimal website built with React, strict TypeScript, Vite, and Tailwind.
+Describe your idea in the Atelier chat to start building. The starter uses
+system fonts and requires no images or external assets.
 
 Use Node.js 20.19+ or 22.12+. Run `npm install`, then `npm run dev`.
 Run `npm run typecheck` and `npm run build` before deployment.

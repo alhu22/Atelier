@@ -28,9 +28,18 @@ function loadMessages(key: string): ConversationMessage[] {
   }
 }
 
+export function startConversation(storageKey: string, prompt: string) {
+  const message: ConversationMessage = {
+    id: crypto.randomUUID(), role: "user", content: prompt.trim(),
+    createdAt: new Date().toISOString(), status: "complete",
+  };
+  localStorage.setItem(storageKey, JSON.stringify([message]));
+}
+
 export function useConversation(
   storageKey: string,
   generate: (prompt: string, options: ChatOptions) => Promise<string[]>,
+  autoStart = false,
 ) {
   const [messages, setMessages] = useState(() => loadMessages(storageKey));
   const [busy, setBusy] = useState(false);
@@ -71,6 +80,15 @@ export function useConversation(
     return () => window.clearTimeout(timer);
   }, [messages, persist]);
 
+  useEffect(() => {
+    if (!autoStart || latest.current.length !== 1 || latest.current[0].role !== "user") return;
+    // Defer until after the StrictMode mount replay, without adding a second user message.
+    const timer = window.setTimeout(() => {
+      void respond(latest.current, latest.current[0].content);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [autoStart]);
+
   function stop() {
     request.current?.abort();
   }
@@ -83,6 +101,7 @@ export function useConversation(
       id: crypto.randomUUID(), role: "assistant", content: "", createdAt: new Date().toISOString(), status: "streaming",
     };
     replace([...history, reply]);
+    persist(latest.current);
     setBusy(true);
     function update(change: Partial<ConversationMessage>) {
       replace(latest.current.map((item) => item.id === reply.id ? { ...item, ...change } : item));

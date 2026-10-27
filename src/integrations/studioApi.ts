@@ -1,6 +1,7 @@
 import type { GitHubRepository, ProjectFiles } from "@/types";
 
 export interface GenerateResponse {
+  name?: string;
   files: ProjectFiles;
   entrypoint: string;
 }
@@ -77,6 +78,7 @@ export async function streamChat(
 
 function isGeneratedProject(value: unknown): value is GenerateResponse {
   return isRecord(value) && isProjectFiles(value.files) &&
+    (value.name === undefined || (typeof value.name === "string" && value.name.trim().length > 0 && value.name.trim().length <= 120)) &&
     typeof value.entrypoint === "string" && typeof value.files[value.entrypoint] === "string";
 }
 

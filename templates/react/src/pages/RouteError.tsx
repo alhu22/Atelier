@@ -5,11 +5,11 @@ export function RouteError() {
   const missing = isRouteErrorResponse(error) && error.status === 404;
   return (
     <section className="section-shell px-6 py-24 text-center" role="alert">
-      <h1 className="font-display text-5xl">{missing ? "Sidan hittades inte" : "Sidan kunde inte visas"}</h1>
+      <h1 className="font-display text-5xl">{missing ? "Page not found" : "Unable to display this page"}</h1>
       <p className="my-6 text-muted-foreground">
-        {missing ? "Kontrollera sidans adress." : "Något gick fel. Gå tillbaka till startsidan och försök igen."}
+        {missing ? "Check the page address." : "Something went wrong. Return home and try again."}
       </p>
-      <Link className="site-button" to="/">Till startsidan</Link>
+      <Link className="site-button" to="/">Back to home</Link>
     </section>
   );
 }
